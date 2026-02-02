@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go-cloud-customer/db"
@@ -418,7 +419,7 @@ func NewUnexpectedErrorResponse() RequestTotpQrCodeResponse {
 		ID:      0,
 		Id:      0,
 		Status:  "0",
-		Details: TotpQrCodeDetails{},
+		Details: "",
 		Errors:  FormatDbErrors([]ErrorResult{ErrInternal("", "Unexpected_Error")}),
 	}
 }
@@ -428,7 +429,7 @@ func NewBadRequestInvalidJSONResponse() RequestTotpQrCodeResponse {
 		ID:      0,
 		Id:      0,
 		Status:  "0",
-		Details: TotpQrCodeDetails{},
+		Details: "",
 		Errors:  FormatDbErrors([]ErrorResult{ErrBadRequest("", "Invalid_JSON")}),
 	}
 }
@@ -438,7 +439,7 @@ func NewValidationErrorResponse(errs []ErrorResult) RequestTotpQrCodeResponse {
 		ID:      0,
 		Id:      0,
 		Status:  "0",
-		Details: TotpQrCodeDetails{},
+		Details: "",
 		Errors:  FormatDbErrors(errs),
 	}
 }
@@ -458,11 +459,18 @@ func RequestTotpQrCodeService(ctx context.Context, req RequestTotpQrCodeRequest,
 		}
 
 		qrB64, secret := GenerateTotpSharedSecretAndQrCode(label)
+		details := TotpQrCodeDetails{QrCode: qrB64, SharedSecret: secret}
+		b, err := json.Marshal(details)
+		if err != nil {
+			logAuthFailure("MarshalTotpQrDetails", err)
+			return NewUnexpectedErrorResponse()
+		}
+
 		resp := RequestTotpQrCodeResponse{
 			ID:      0,
 			Id:      0,
 			Status:  "1",
-			Details: TotpQrCodeDetails{QrCode: qrB64, SharedSecret: secret},
+			Details: string(b),
 			Errors:  "",
 		}
 		if authData != nil {

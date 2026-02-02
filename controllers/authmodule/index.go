@@ -8,6 +8,7 @@ import (
 )
 
 func (s *AuthModuleService) RequestTotpQrCode(req *RequestTotpQrCodeRequest, res *RequestTotpQrCodeResponse) error {
+
 	if res == nil {
 		return fmt.Errorf("RequestTotpQrCode: nil response pointer")
 	}
@@ -32,5 +33,7 @@ func (s *AuthModuleService) RequestTotpQrCode(req *RequestTotpQrCodeRequest, res
 	}
 	*res = out
 	res.Id = res.ID
+
+	fmt.Println("here is my func", res)
 	return nil
 }

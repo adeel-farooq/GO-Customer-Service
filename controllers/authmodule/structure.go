@@ -19,10 +19,10 @@ type TotpQrCodeDetails struct {
 }
 
 type RequestTotpQrCodeResponse struct {
-	ID      int               `json:"id"`
-	Id      int               `json:"-"`
-	Status  string            `json:"status"`
-	Details TotpQrCodeDetails `json:"details"`
+	ID      int    `json:"id"`
+	Id      int    `json:"Id"` // legacy (.NET style)
+	Status  string `json:"status"`
+	Details string `json:"details"` // JSON string for gob compatibility
 	// NOTE: keep as string for gob compatibility (no interface{}).
 	Errors string `json:"errors"`
 }

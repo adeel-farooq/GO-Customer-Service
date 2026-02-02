@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go-cloud-customer/constants"
 	"go-cloud-customer/db"
+	"go-cloud-customer/middleware"
 	"go-cloud-customer/services/registerMethods"
 	"log"
 	"net/rpc"
@@ -75,6 +76,6 @@ func main() {
 			log.Printf("Connection error: %v", err)
 			continue
 		}
-		go rpcServer.ServeConn(conn)
+		go middleware.ServeConnWithRecovery(rpcServer, conn)
 	}
 }
