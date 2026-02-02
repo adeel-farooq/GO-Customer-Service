@@ -2,8 +2,11 @@ package authmodule
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +14,7 @@ import (
 	"go-cloud-customer/db"
 	"log"
 	"math/rand"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -222,8 +226,208 @@ func GetSiteUsersAuthData(ctx context.Context, username, accountType, domain str
 		BSuppressed:         getBool("bSuppressed", "BSuppressed", "suppressed"),
 		TryLoginCount:       getInt("TryLoginCount", "tryLoginCount"),
 		DateLastFailedLogin: getTimePtr("DateLastFailedLogin", "dateLastFailedLogin", "DateLastFailed", "dateLastFailed"),
+
+		TwoFactorSMSAuthEnabled: getBool("TwoFactorSMSAuthEnabled", "twoFactorSMSAuthEnabled", "bTwoFactorSMSAuthEnabled"),
+		TwoFactorAppAuthEnabled: getBool("TwoFactorAppAuthEnabled", "twoFactorAppAuthEnabled", "bTwoFactorAppAuthEnabled"),
+		TfaCode:                 getString("TfaCode", "tfaCode"),
+		TfaCodeExpiry:           getTimePtr("TfaCodeExpiry", "tfaCodeExpiry"),
+		TotpSharedSecret:        getString("TotpSharedSecret", "totpSharedSecret"),
+		BEmailVerified:          getBool("BEmailVerified", "bEmailVerified"),
 	}
 	return out, nil
+}
+
+// ---------- Enable TFA ----------
+
+func ValidateEnableTfa(req EnableTfaRequest) []ErrorResultPublic {
+	var errs []ErrorResultPublic
+
+	if strings.TrimSpace(req.Username) == "" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "Username", MessageCode: "Required"})
+	}
+	if strings.TrimSpace(req.Password) == "" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "Password", MessageCode: "Required"})
+	}
+	if strings.TrimSpace(req.TfaType) == "" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "TfaType", MessageCode: "Required"})
+	} else if req.TfaType != "SMS" && req.TfaType != "AuthenticatorApp" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "TfaType", MessageCode: "Invalid"})
+	}
+
+	if strings.TrimSpace(req.TfaCode) == "" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "TfaCode", MessageCode: "Required"})
+	}
+
+	if req.TfaType == "SMS" && strings.TrimSpace(req.PhoneNumber) == "" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "PhoneNumber", MessageCode: "Required"})
+	}
+	if req.TfaType == "AuthenticatorApp" && strings.TrimSpace(req.TotpSharedSecret) == "" {
+		errs = append(errs, ErrorResultPublic{ErrorType: "BadRequest", FieldName: "TotpSharedSecret", MessageCode: "Required"})
+	}
+
+	return dedupPublicErrors(errs)
+}
+
+func dedupPublicErrors(in []ErrorResultPublic) []ErrorResultPublic {
+	seen := map[string]struct{}{}
+	out := make([]ErrorResultPublic, 0, len(in))
+	for _, e := range in {
+		k := e.ErrorType + "|" + e.FieldName + "|" + e.MessageCode
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, e)
+	}
+	return out
+}
+
+func publicErrorsJSON(errs []ErrorResultPublic) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(errs)
+	if err != nil {
+		// last resort: keep it non-empty
+		return "[{\"errorType\":\"InternalServerError\",\"fieldName\":\"\",\"messageCode\":\"Unexpected_Error\"}]"
+	}
+	return string(b)
+}
+
+type tfaStatus string
+
+const (
+	tfaOK      tfaStatus = "Success"
+	tfaInvalid tfaStatus = "Invalid"
+	tfaExpired tfaStatus = "Expired"
+)
+
+func validateTfaCode(req EnableTfaRequest, authData *SiteUsersAuthData) tfaStatus {
+	if req.TfaType == "AuthenticatorApp" {
+		if verifyTotpRFC6238(req.TfaCode, req.TotpSharedSecret) {
+			return tfaOK
+		}
+		return tfaInvalid
+	}
+
+	// SMS
+	if authData != nil && authData.TfaCodeExpiry != nil && time.Now().UTC().After(authData.TfaCodeExpiry.UTC()) {
+		return tfaExpired
+	}
+	if authData != nil && strings.TrimSpace(authData.TfaCode) != "" && authData.TfaCode == strings.TrimSpace(req.TfaCode) {
+		return tfaOK
+	}
+	return tfaInvalid
+}
+
+func tfaCodeErrors(st tfaStatus) []ErrorResultPublic {
+	if st == tfaExpired {
+		return []ErrorResultPublic{{ErrorType: "BadRequest", FieldName: "TfaCode", MessageCode: "Expired"}}
+	}
+	return []ErrorResultPublic{{ErrorType: "BadRequest", FieldName: "TfaCode", MessageCode: "Invalid"}}
+}
+
+// verifyTotpRFC6238 verifies a 6-digit TOTP code for the given base32 secret.
+// Uses HMAC-SHA1, 30s period, and a ±1 step window.
+func verifyTotpRFC6238(code, secret string) bool {
+	code = strings.TrimSpace(code)
+	secret = strings.TrimSpace(secret)
+	if len(code) == 0 || len(secret) == 0 {
+		return false
+	}
+	// Some clients may URL-encode the secret.
+	if dec, err := url.QueryUnescape(secret); err == nil {
+		secret = dec
+	}
+	secret = strings.ToUpper(strings.ReplaceAll(secret, " ", ""))
+
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		return false
+	}
+
+	now := time.Now().UTC().Unix()
+	step := int64(30)
+	counter := now / step
+
+	for offset := int64(-1); offset <= 1; offset++ {
+		if totpAt(key, counter+offset, 6) == code {
+			return true
+		}
+	}
+	return false
+}
+
+func totpAt(key []byte, counter int64, digits int) string {
+	// 8-byte big endian counter
+	var msg [8]byte
+	for i := 7; i >= 0; i-- {
+		msg[i] = byte(counter & 0xff)
+		counter >>= 8
+	}
+
+	mac := hmac.New(sha1.New, key)
+	_, _ = mac.Write(msg[:])
+	sum := mac.Sum(nil)
+
+	offset := int(sum[len(sum)-1] & 0x0f)
+	bin := (int(sum[offset])&0x7f)<<24 |
+		(int(sum[offset+1])&0xff)<<16 |
+		(int(sum[offset+2])&0xff)<<8 |
+		(int(sum[offset+3]) & 0xff)
+
+	mod := 1
+	for i := 0; i < digits; i++ {
+		mod *= 10
+	}
+	val := bin % mod
+
+	out := strconv.Itoa(val)
+	for len(out) < digits {
+		out = "0" + out
+	}
+	return out
+}
+
+func enableSmsTfa(ctx context.Context, siteUsersId int, phoneNumber string) error {
+	if db.DB == nil {
+		return errors.New("DB is nil")
+	}
+	sp := "v1_General_Security_EnableSmsTfa"
+	q := "EXEC " + sp + " @SiteUsersId=@SiteUsersId, @PhoneNumber=@PhoneNumber"
+	_, err := db.DB.ExecContext(ctx, q, sql.Named("SiteUsersId", siteUsersId), sql.Named("PhoneNumber", phoneNumber))
+	return err
+}
+
+func enableAppTfa(ctx context.Context, siteUsersId int, totpSharedSecret string) error {
+	if db.DB == nil {
+		return errors.New("DB is nil")
+	}
+	sp := "v1_General_Security_EnableAppTfa"
+	q := "EXEC " + sp + " @SiteUsersId=@SiteUsersId, @TotpSharedSecret=@TotpSharedSecret"
+	_, err := db.DB.ExecContext(ctx, q, sql.Named("SiteUsersId", siteUsersId), sql.Named("TotpSharedSecret", totpSharedSecret))
+	return err
+}
+
+func enableTfaDetailsJSON(authData *SiteUsersAuthData) string {
+	// Minimal shape; gateway can decode this JSON string.
+	obj := map[string]any{
+		"bTwoFactorSMSAuthEnabled": false,
+		"bTwoFactorAppAuthEnabled": false,
+	}
+	if authData != nil {
+		obj["bTwoFactorSMSAuthEnabled"] = authData.TwoFactorSMSAuthEnabled
+		obj["bTwoFactorAppAuthEnabled"] = authData.TwoFactorAppAuthEnabled
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func constTimeEquals(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // ---------- Validation rules (matches .NET ValidateUsernameAndPassword) ----------
