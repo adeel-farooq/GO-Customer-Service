@@ -21,6 +21,10 @@ func RegisterCustomerServices(rpcServer *rpc.Server) {
 	if err != nil {
 		log.Fatalf("Error registering customer service: %v", err)
 	}
+	err = rpcServer.Register(new(customer.BusinessService))
+	if err != nil {
+		log.Fatalf("Error registering business service: %v", err)
+	}
 
 	/* Register restricted services */
 	err = rpcServer.Register(new(restricted.RestrictedService))

@@ -69,6 +69,11 @@ func (s *AuthModuleService) EnableTfa(req *EnableTfaRequest, res *DbResultRPC) e
 	domain := GetDomainOrDefault(req.Domain)
 	log.Printf("AuthModule EnableTfa: resolved domain=%s username=%s", domain, strings.TrimSpace(req.Username))
 	authData, err := GetSiteUsersAuthData(ctx, req.Username, "Customer", domain)
+	if b, errJson := json.MarshalIndent(authData, "", "  "); errJson == nil {
+		log.Printf("AuthModule EnableTfa: authData=%s", string(b))
+	} else {
+		log.Printf("AuthModule EnableTfa: authData=%+v", authData)
+	}
 	if err != nil {
 		logAuthFailure("GetSiteUsersAuthData", err)
 		log.Printf("AuthModule EnableTfa: db error username=%s domain=%s", strings.TrimSpace(req.Username), domain)
@@ -138,6 +143,9 @@ func (s *AuthModuleService) EnableTfa(req *EnableTfaRequest, res *DbResultRPC) e
 	}
 
 	if req.TfaType == "SMS" {
+		sp := "v1_General_Security_EnableSmsTfa"
+		q := "EXEC " + sp + " @SiteUsersId=@SiteUsersId, @PhoneNumber=@PhoneNumber"
+		log.Printf("AuthModule EnableTfa: running SQL: %s -- @SiteUsersId=%d, @PhoneNumber='%s'", q, authData.SiteUsersId, req.PhoneNumber)
 		if err := enableSmsTfa(ctx, authData.SiteUsersId, req.PhoneNumber); err != nil {
 			logAuthFailure("EnableSmsTfa", err)
 			log.Printf("AuthModule EnableTfa: enable sms failed username=%s siteUsersId=%d", strings.TrimSpace(req.Username), authData.SiteUsersId)
@@ -147,6 +155,9 @@ func (s *AuthModuleService) EnableTfa(req *EnableTfaRequest, res *DbResultRPC) e
 		}
 		authData.TwoFactorSMSAuthEnabled = true
 	} else {
+		sp := "v1_General_Security_EnableAppTfa"
+		q := "EXEC " + sp + " @SiteUsersId=@SiteUsersId, @TotpSharedSecret=@TotpSharedSecret"
+		log.Printf("AuthModule EnableTfa: running SQL: %s -- @SiteUsersId=%d, @TotpSharedSecret='%s'", q, authData.SiteUsersId, req.TotpSharedSecret)
 		if err := enableAppTfa(ctx, authData.SiteUsersId, req.TotpSharedSecret); err != nil {
 			logAuthFailure("EnableAppTfa", err)
 			log.Printf("AuthModule EnableTfa: enable app failed username=%s siteUsersId=%d", strings.TrimSpace(req.Username), authData.SiteUsersId)

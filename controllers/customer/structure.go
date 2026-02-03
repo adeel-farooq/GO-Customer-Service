@@ -1,8 +1,11 @@
 package customer
 
+import "encoding/json"
+
 // CustomerService is the RPC service.
 // Example RPC method string: "CustomerService.RegisterCustomerUser".
 type CustomerService struct{}
+type BusinessService struct{}
 
 // This struct matches the .NET V2 DTO:
 // AvamaeTemplate.Core.Types.Dtos.PublicRole.RegistrationV2Module.CustomerUserRegistrationDto
@@ -74,4 +77,107 @@ func NewSuccessResult(id int64) Result {
 
 func NewFailureResult(errs ...ErrorResult) Result {
 	return Result{Id: 0, Status: "0", Errors: errs}
+}
+
+type UploadDocumentRequest struct {
+	// file payload
+	FileName    string `json:"fileName"`
+	ContentType string `json:"contentType"`
+	FileBytes   []byte `json:"fileBytes"` // gateway sends raw bytes (base64 happens in JSON transport automatically in Go RPC)
+
+	// metadata
+	BusinessId     int64  `json:"businessId"`
+	DocumentTypeId int64  `json:"documentTypeId"`
+	DocumentName   string `json:"documentName,omitempty"`
+	Description    string `json:"description,omitempty"`
+
+	// context
+	SiteUsersId int64 `json:"siteUsersId"` // if you have auth context
+}
+
+type SaveVerificationFormRequest struct {
+	CustomersId int64  `json:"customersId"`
+	SiteUsersId int64  `json:"siteUsersId"`
+	AddedBy     string `json:"addedBy"`
+
+	// raw command JSON (same as .NET VerificationFormDto)
+	Command json.RawMessage `json:"command"`
+}
+
+// Minimal parts we need for missing files + ownership graph
+type VerificationForm struct {
+	BusinessVerificationStep string            `json:"businessVerificationStep"`
+	OwnerInformation         *OwnerInformation `json:"ownerInformation,omitempty"`
+	RegistrationInformation  json.RawMessage   `json:"registrationInformation,omitempty"`
+	OperationsInformation    *OperationsInfo   `json:"operationsInformation,omitempty"`
+}
+
+type OwnerInformation struct {
+	BeneficialOwnersStructure  json.RawMessage             `json:"beneficialOwnersStructure,omitempty"`
+	IndividualBeneficialOwners []IndividualBeneficialOwner `json:"individualBeneficialOwners,omitempty"`
+}
+
+type IndividualBeneficialOwner struct {
+	ProofOfAddressFilename string `json:"proofOfAddressFilename,omitempty"`
+}
+
+type OperationsInfo struct {
+	FinancialInstitutionFormFileName string `json:"financialInstitutionFormFileName,omitempty"`
+}
+
+// Ownership graph structs (ported from OwnershipTreeDto.cs)
+type OwnershipTreeNode struct {
+	BIsBusiness       *bool               `json:"bIsBusiness,omitempty"`
+	OwnersGuid        string              `json:"ownersGuid,omitempty"`
+	PercentageOwned   float64             `json:"percentageOwned,omitempty"`
+	BControllingParty *bool               `json:"bControllingParty,omitempty"`
+	PositionAtCompany string              `json:"positionAtCompany,omitempty"`
+	Children          []OwnershipTreeNode `json:"children,omitempty"`
+}
+
+type OwnershipGraph struct {
+	Vertices []OwnershipVertex `json:"vertices"`
+	Edges    []OwnershipEdge   `json:"edges"`
+}
+
+type OwnershipVertex struct {
+	OwnersGuid string              `json:"ownersGuid"`
+	VertexData OwnershipVertexData `json:"vertexData"`
+}
+
+type OwnershipVertexData struct {
+	BIsBusiness *bool `json:"bIsBusiness,omitempty"`
+}
+
+type OwnershipEdge struct {
+	SourceVertexGuid string            `json:"sourceVertexGuid"`
+	TargetVertexGuid string            `json:"targetVertexGuid"`
+	EdgeData         OwnershipEdgeData `json:"edgeData"`
+	BInSpanningTree  bool              `json:"bInSpanningTree"`
+}
+
+type OwnershipEdgeData struct {
+	PercentageOwned   float64 `json:"percentageOwned,omitempty"`
+	PositionAtCompany string  `json:"positionAtCompany,omitempty"`
+	BControllingParty *bool   `json:"bControllingParty,omitempty"`
+}
+
+// ResultDto shape (simplified) – .NET JSON format compatible
+type ResultDto struct {
+	Id     int64             `json:"id"`
+	Errors []ErrorResultFile `json:"errors"`
+}
+
+type DbResultFile struct {
+	ID      int64  `json:"id"`
+	Id      int64  `json:"Id"`
+	Status  string `json:"status"`
+	Details string `json:"details"` // RAW JSON string (safe for net/rpc gob)
+	Errors  string `json:"errors"`  // RAW JSON string (array) or empty
+}
+
+type ErrorResultFile struct {
+	ErrorType   string `json:"errorType"`
+	FieldName   string `json:"fieldName"`
+	MessageCode string `json:"messageCode"`
 }

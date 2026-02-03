@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,40 @@ import (
 )
 
 // -------------------- Validation (match .NET attributes) --------------------
+
+// parseLegacyDbErrorString parses legacy DB error strings like:
+// "Unauthenticated]_[CustomersID]_[User_Not_Found ]|[ Unauthenticated]_[SiteUsersID]_[User_Not_Found ]|[ ..."
+// into []ErrorResultFile objects.
+func parseLegacyDbErrorString(s string) []ErrorResultFile {
+	var results []ErrorResultFile
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return results
+	}
+	// Split by |[ or | [
+	parts := strings.Split(s, "|[")
+	for _, part := range parts {
+		part = strings.Trim(part, " []|\t\n\r")
+		if part == "" {
+			continue
+		}
+		// Split by ]_[
+		fields := strings.Split(part, "]_[")
+		// Defensive: pad to 3 fields
+		for len(fields) < 3 {
+			fields = append(fields, "")
+		}
+		errType := strings.TrimSpace(fields[0])
+		fieldName := strings.TrimSpace(fields[1])
+		msgCode := strings.TrimSpace(fields[2])
+		results = append(results, ErrorResultFile{
+			ErrorType:   errType,
+			FieldName:   fieldName,
+			MessageCode: msgCode,
+		})
+	}
+	return results
+}
 
 var (
 	phoneRegexp = regexp.MustCompile(`^(\+?\d+)?\s?(\(\d+\))?\s?(\d+-\d+)?$`)
@@ -595,5 +631,180 @@ func DedupErrors(in []ErrorResult) []ErrorResult {
 	return out
 }
 
-// Prevent unused import issues if future edits remove time usage elsewhere.
-var _ = time.Second
+func ValidateUploadDocument(req *UploadDocumentRequest) []ErrorResult {
+	var errs []ErrorResult
+
+	if req == nil {
+		return []ErrorResult{{ErrorType: "BadRequest", FieldName: "", MessageCode: "Invalid_JSON"}}
+	}
+	if len(req.FileBytes) == 0 {
+		errs = append(errs, ErrorResult{"BadRequest", "file", "Required"})
+	}
+	if strings.TrimSpace(req.FileName) == "" {
+		errs = append(errs, ErrorResult{"BadRequest", "fileName", "Required"})
+	}
+	if req.BusinessId <= 0 {
+		errs = append(errs, ErrorResult{"BadRequest", "businessId", "Required"})
+	}
+	if req.DocumentTypeId <= 0 {
+		errs = append(errs, ErrorResult{"BadRequest", "documentTypeId", "Required"})
+	}
+
+	// size limit example (10MB). Adjust to your rules
+	const maxSize = 10 * 1024 * 1024
+	if len(req.FileBytes) > maxSize {
+		errs = append(errs, ErrorResult{"BadRequest", "file", "File_Too_Large"})
+	}
+
+	return DedupErrorsFile(errs)
+}
+
+func ValidateSaveVerificationForm(req *SaveVerificationFormRequest) []ErrorResultFile {
+	var errs []ErrorResultFile
+
+	if req == nil {
+		return []ErrorResultFile{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
+	}
+	cmd := strings.TrimSpace(string(req.Command))
+	if cmd == "" || cmd == "null" {
+		errs = append(errs, ErrorResultFile{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"})
+	}
+
+	return DedupErrorsResultFile(errs)
+}
+
+func DedupErrorsResultFile(in []ErrorResultFile) []ErrorResultFile {
+	seen := map[string]struct{}{}
+	out := make([]ErrorResultFile, 0, len(in))
+	for _, e := range in {
+		k := e.ErrorType + "|" + e.FieldName + "|" + e.MessageCode
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, e)
+	}
+	return out
+}
+
+func marshalErrorResultFiles(errs []ErrorResultFile) string {
+	b, _ := json.Marshal(errs)
+	return string(b)
+}
+
+// -------------------- Business form helpers (SaveVerificationForm) --------------------
+
+// Azure storage helper (plug your implementation)
+type StorageHelper interface {
+	CheckFileExists(path string, container string) (bool, error)
+}
+
+var Storage StorageHelper
+
+// .NET: private string GetBusinessFormDocumentPath(int customersId)
+// => $"BusinessFormDocuments/{customersId}/BusinessDocuments/"
+func businessFormDocumentPath(customersId int64) string {
+	return fmt.Sprintf("BusinessFormDocuments/%d/BusinessDocuments/", customersId)
+}
+
+func buildOwnershipGraph(root OwnershipTreeNode) OwnershipGraph {
+	vertices := make([]OwnershipVertex, 0, 64)
+	edges := make([]OwnershipEdge, 0, 128)
+
+	vertices = append(vertices, OwnershipVertex{
+		OwnersGuid: root.OwnersGuid,
+		VertexData: OwnershipVertexData{BIsBusiness: root.BIsBusiness},
+	})
+
+	if len(root.Children) > 0 {
+		for _, sub := range root.Children {
+			hasChildren := len(sub.Children) > 0
+			edges = append(edges, OwnershipEdge{
+				SourceVertexGuid: root.OwnersGuid,
+				TargetVertexGuid: sub.OwnersGuid,
+				EdgeData: OwnershipEdgeData{
+					PercentageOwned:   sub.PercentageOwned,
+					PositionAtCompany: sub.PositionAtCompany,
+					BControllingParty: sub.BControllingParty,
+				},
+				BInSpanningTree: hasChildren,
+			})
+		}
+
+		for _, sub := range root.Children {
+			subGraph := buildOwnershipGraph(sub)
+			vertices = mergeVertices(vertices, subGraph.Vertices)
+			edges = mergeEdges(edges, subGraph.Edges)
+		}
+	}
+
+	return OwnershipGraph{Vertices: vertices, Edges: edges}
+}
+
+func mergeVertices(base []OwnershipVertex, add []OwnershipVertex) []OwnershipVertex {
+	seen := map[string]bool{}
+	for _, v := range base {
+		seen[v.OwnersGuid] = true
+	}
+	for _, v := range add {
+		if !seen[v.OwnersGuid] {
+			seen[v.OwnersGuid] = true
+			base = append(base, v)
+		}
+	}
+	return base
+}
+
+func edgeKey(e OwnershipEdge) string {
+	return e.SourceVertexGuid + "->" + e.TargetVertexGuid
+}
+
+func mergeEdges(base []OwnershipEdge, add []OwnershipEdge) []OwnershipEdge {
+	seen := map[string]bool{}
+	for _, e := range base {
+		seen[edgeKey(e)] = true
+	}
+	for _, e := range add {
+		k := edgeKey(e)
+		if !seen[k] {
+			seen[k] = true
+			base = append(base, e)
+		}
+	}
+	return base
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func DedupErrorsFile(in []ErrorResult) []ErrorResult {
+	seen := map[string]struct{}{}
+	out := make([]ErrorResult, 0, len(in))
+	for _, e := range in {
+		k := e.ErrorType + "|" + e.FieldName + "|" + e.MessageCode
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, e)
+	}
+	return out
+}
+
+// Storage upload stub: replace with your S3 client code
+func UploadToStorage(fileName string, contentType string, fileBytes []byte) (storageKey string, publicURL string, err error) {
+	sum := sha256.Sum256(fileBytes)
+	hash := hex.EncodeToString(sum[:])
+
+	// Example key:
+	key := fmt.Sprintf("business-docs/%s/%s", hash, fileName)
+
+	// TODO: call S3 PutObject here
+	// publicURL := "https://<bucket>.s3.amazonaws.com/" + key
+
+	return key, "", nil
+}
+
+// SP call stub: use your existing dbGetSPResult style
+func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedParams ...any) (id int64, status string, errorsStr string, err error) {
+	return 0, "0", "Not_Implemented", errors.New("dbGetSPResult not wired")
+}
