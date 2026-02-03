@@ -2,6 +2,41 @@ package customer
 
 import "encoding/json"
 
+// DocumentGroupList request/response structs
+type GetDocumentGroupListRequest struct {
+	CustomersId int64 `json:"customersId"`
+	SiteUsersId int64 `json:"siteUsersId"`
+}
+
+// ---- KYC Document V3 ----
+type AddKYCDocumentRequest struct {
+	CustomersId int64  `json:"customersId"`
+	SiteUsersId int64  `json:"siteUsersId"`
+	AddedBy     string `json:"addedBy"`
+
+	DocumentId int64  `json:"documentId"`
+	Note       string `json:"note"`
+
+	CustomersBusinessDocumentsId *int64 `json:"customersBusinessDocumentsId,omitempty"`
+
+	// file (optional)
+	FileName    string `json:"fileName,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	FileBytes   []byte `json:"fileBytes,omitempty"`
+}
+
+type DbResultRPC struct {
+	ID      int64  `json:"id"`
+	Id      int64  `json:"Id"`
+	Status  string `json:"status"`
+	Details string `json:"details"` // RAW JSON string
+	Errors  string `json:"errors"`  // RAW JSON string OR "" OR plain string
+}
+
+type UploadedDocumentDetails struct {
+	FileName string `json:"fileName"`
+}
+
 // CustomerService is the RPC service.
 // Example RPC method string: "CustomerService.RegisterCustomerUser".
 type CustomerService struct{}
@@ -86,10 +121,11 @@ type UploadDocumentRequest struct {
 	FileBytes   []byte `json:"fileBytes"` // gateway sends raw bytes (base64 happens in JSON transport automatically in Go RPC)
 
 	// metadata
-	BusinessId     int64  `json:"businessId"`
-	DocumentTypeId int64  `json:"documentTypeId"`
-	DocumentName   string `json:"documentName,omitempty"`
-	Description    string `json:"description,omitempty"`
+	CustomersId int64 `json:"customersId"`
+	// DocumentTypeId int64  `json:"documentTypeId"`
+	DocumentId   int64  `json:"documentId"`
+	DocumentName string `json:"documentName,omitempty"`
+	Description  string `json:"description,omitempty"`
 
 	// context
 	SiteUsersId int64 `json:"siteUsersId"` // if you have auth context

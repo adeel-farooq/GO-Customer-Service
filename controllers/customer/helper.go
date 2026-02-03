@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -24,6 +25,157 @@ import (
 
 	"golang.org/x/crypto/pbkdf2"
 )
+
+// buildGroupsFromDocumentList: detailsStr me se listData nikalo, phir group banao
+func buildGroupsFromDocumentList(detailsStr string) (string, bool) {
+	var root any
+	if json.Unmarshal([]byte(detailsStr), &root) != nil {
+		return "", false
+	}
+
+	// Expecting: { "listData": [ ... ] } or { "details": { "listData": [...] } } types
+	list := extractListData(root)
+	if list == nil {
+		return "", false
+	}
+
+	type Group struct {
+		GroupKey string                   `json:"groupKey"`
+		Items    []map[string]interface{} `json:"items"`
+	}
+
+	groups := map[string][]map[string]interface{}{}
+
+	for _, it := range list {
+		// possible keys (aapke SP columns pe depend)
+		key := pickGroupKey(it)
+		groups[key] = append(groups[key], it)
+	}
+
+	out := make([]Group, 0, len(groups))
+	for k, items := range groups {
+		out = append(out, Group{GroupKey: k, Items: items})
+	}
+
+	b, _ := json.Marshal(map[string]interface{}{
+		"groups": out,
+	})
+	return string(b), true
+}
+
+func extractListData(root any) []map[string]interface{} {
+	// case1: root["listData"]
+	if m, ok := root.(map[string]interface{}); ok {
+		if v, ok := m["listData"]; ok {
+			return castList(v)
+		}
+		if d, ok := m["details"]; ok {
+			if md, ok := d.(map[string]interface{}); ok {
+				if v, ok := md["listData"]; ok {
+					return castList(v)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func castList(v any) []map[string]interface{} {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(arr))
+	for _, x := range arr {
+		if m, ok := x.(map[string]interface{}); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func pickGroupKey(item map[string]interface{}) string {
+	// try common keys
+	if v, ok := item["documentGroupName"]; ok {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	if v, ok := item["documentGroupId"]; ok {
+		return fmt.Sprintf("group_%v", v)
+	}
+	// fallback
+	return "default"
+}
+
+func businessKycDocPath(customersId int64) string {
+	return fmt.Sprintf("BusinessKYCDocuments/%d/BusinessDocuments/", customersId)
+}
+
+// ---- Storage stubs for KYC ----
+// Replace with your real implementations.
+func StorageSaveOrOverwrite(path, contentType string, fileBytes []byte, container string) (bool, error) {
+	// TODO: Implement actual storage logic
+	return true, nil
+}
+
+func StorageDeleteIfExists(fullPath, container string) error {
+	// TODO: Implement actual storage logic
+	return nil
+}
+
+func AzureBlobSecureRootContainerName() string {
+	return "secure-container"
+}
+
+func businessKycDocName(customersId, siteUsersId int64, originalFileName string) string {
+	return fmt.Sprintf("%d_%d_%s", customersId, siteUsersId, originalFileName)
+}
+
+func validateAddKycDocument(req *AddKYCDocumentRequest) []ErrorResult {
+	var errs []ErrorResult
+	if req == nil {
+		return []ErrorResult{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
+	}
+	if req.DocumentId <= 0 {
+		errs = append(errs, ErrorResult{"BadRequest", "DocumentId", "Required"})
+	}
+	if req.CustomersBusinessDocumentsId == nil {
+		if len(req.FileBytes) == 0 {
+			errs = append(errs, ErrorResult{"BadRequest", "File", "Required"})
+		}
+	}
+	return errs
+}
+
+func validateFileTypeAndExt(contentType, fileName string) *ErrorResult {
+	allowedTypes := map[string]bool{
+		"application/pdf": true,
+		"image/png":       true,
+		"image/jpeg":      true,
+	}
+	if !allowedTypes[strings.TrimSpace(strings.ToLower(contentType))] {
+		e := ErrorResult{"BadRequest", "File", "Invalid_Format"}
+		return &e
+	}
+
+	ext := strings.ToLower(filepath.Ext(fileName))
+	allowedExt := map[string]bool{".pdf": true, ".png": true, ".jpeg": true, ".jpg": true}
+	if !allowedExt[ext] {
+		e := ErrorResult{"BadRequest", "File", "Invalid_Extension"}
+		return &e
+	}
+	return nil
+}
+
+func toErrorsJSON(errs []ErrorResult) string {
+	b, _ := json.Marshal(errs)
+	return string(b)
+}
+
+func withTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
 
 // -------------------- Validation (match .NET attributes) --------------------
 
@@ -643,12 +795,12 @@ func ValidateUploadDocument(req *UploadDocumentRequest) []ErrorResult {
 	if strings.TrimSpace(req.FileName) == "" {
 		errs = append(errs, ErrorResult{"BadRequest", "fileName", "Required"})
 	}
-	if req.BusinessId <= 0 {
-		errs = append(errs, ErrorResult{"BadRequest", "businessId", "Required"})
-	}
-	if req.DocumentTypeId <= 0 {
-		errs = append(errs, ErrorResult{"BadRequest", "documentTypeId", "Required"})
-	}
+	// if req.BusinessId <= 0 {
+	// 	errs = append(errs, ErrorResult{"BadRequest", "businessId", "Required"})
+	// }
+	// if req.DocumentTypeId <= 0 {
+	// 	errs = append(errs, ErrorResult{"BadRequest", "documentTypeId", "Required"})
+	// }
 
 	// size limit example (10MB). Adjust to your rules
 	const maxSize = 10 * 1024 * 1024
@@ -804,7 +956,50 @@ func UploadToStorage(fileName string, contentType string, fileBytes []byte) (sto
 	return key, "", nil
 }
 
-// SP call stub: use your existing dbGetSPResult style
 func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedParams ...any) (id int64, status string, errorsStr string, err error) {
-	return 0, "0", "Not_Implemented", errors.New("dbGetSPResult not wired")
+	// Only allow known SPs
+	allowedSPs := map[string]bool{
+		"v1_CustomerRole_BusinessModule_GetKYCDocumentList":        true,
+		"v1_CustomerRole_BusinessModule_ValidateKYCDocumentUpload": true,
+		"v1_CustomerRole_BusinessModule_CompleteKYCDocumentUpload": true,
+		"v1_CustomerRole_BusinessModule_GetKYCDocumentDetails":     true,
+		"v1_CustomerRole_BusinessModule_DeleteKYCDocument":         true,
+	}
+	if !allowedSPs[sp] {
+		return 0, "0", "SP not implemented or does not exist", fmt.Errorf("SP not implemented: %s", sp)
+	}
+
+	// Convert namedParams (variadic) to map[string]any
+	params := map[string]any{}
+	if len(namedParams) == 1 {
+		// If a single map is passed
+		if m, ok := namedParams[0].(map[string]interface{}); ok {
+			params = m
+		} else if m, ok := namedParams[0].(map[string]any); ok {
+			params = m
+		}
+	} else if len(namedParams)%2 == 0 {
+		for i := 0; i < len(namedParams); i += 2 {
+			k, _ := namedParams[i].(string)
+			params[k] = namedParams[i+1]
+		}
+	}
+
+	dbRes, err := ExecSPDbResult(ctx, sp, params)
+	if err != nil {
+		return 0, "0", err.Error(), err
+	}
+	if detailsOut != nil {
+		if s, ok := dbRes.Details.(string); ok {
+			*detailsOut = s
+		} else {
+			*detailsOut = ""
+		}
+	}
+	if s, ok := dbRes.Errors.(string); ok {
+		errorsStr = s
+	} else {
+		errorsStr = ""
+	}
+	return int64(dbRes.ID), dbRes.Status, errorsStr, nil
 }

@@ -9,6 +9,64 @@ import (
 	"time"
 )
 
+// DocumentGroupList RPC method
+func (s *BusinessService) DocumentGroupList(req *GetDocumentGroupListRequest, res *DbResultRPC) error {
+	if res == nil {
+		return fmt.Errorf("DocumentGroupList: nil response pointer")
+	}
+	if req == nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: `[{"errorType":"BadRequest","fieldName":"Json","messageCode":"Invalid_Json"}]`}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sp := "v1_CustomerRole_BusinessModule_GetKYCDocumentList"
+	var detailsStr string
+	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr, map[string]interface{}{
+		"CustomersId": req.CustomersId,
+		"SiteUsersId": req.SiteUsersId,
+	})
+	if err != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		return nil
+	}
+
+	if strings.TrimSpace(errorsStr) == "" {
+		status = "1"
+	}
+
+	groupedJSON := detailsStr
+	if strings.TrimSpace(detailsStr) != "" {
+		if out, ok := buildGroupsFromDocumentList(detailsStr); ok {
+			groupedJSON = out
+		}
+	}
+
+	       // Parse errors to array of objects if not empty
+	       var errorsArr []ErrorResultFile
+	       if strings.TrimSpace(errorsStr) != "" {
+		       errorsArr = parseLegacyDbErrorString(errorsStr)
+	       }
+	       finalErrors := errorsStr
+	       if len(errorsArr) > 0 {
+		       b, _ := json.Marshal(errorsArr)
+		       finalErrors = string(b)
+		       status = "0"
+	       } else {
+		       status = "1"
+	       }
+	       *res = DbResultRPC{
+		       ID:      id,
+		       Id:      id,
+		       Status:  status,
+		       Details: groupedJSON,
+		       Errors:  finalErrors,
+	       }
+	       return nil
+}
+
 func (s *CustomerService) RegisterCustomerUser(req *CustomerUserRegistrationRequest, res *DbResult) error {
 	start := time.Now()
 
@@ -121,28 +179,25 @@ func (s *BusinessService) UploadDocument(req *UploadDocumentRequest, res *DbResu
 	defer cancel()
 
 	// 1) Upload to storage
-	key, url, err := UploadToStorage(req.FileName, req.ContentType, req.FileBytes)
+	_, _, err := UploadToStorage(req.FileName, req.ContentType, req.FileBytes)
 	if err != nil {
 		*res = DbResultFile{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
 		return nil
 	}
 
 	// 2) Save metadata in DB
-	// IMPORTANT: SP name is a placeholder. Replace with your actual SP.
-	sp := "v3_CustomerRole_BusinessModule_UploadDocument"
+	sp := "v1_CustomerRole_BusinessModule_ValidateKYCDocumentUpload"
 
 	var detailsStr string
 	id, status, errorsStr, dbErr := dbGetSPResult(
 		ctx, sp, &detailsStr,
+		"CustomersId", req.CustomersId,
 		"SiteUsersId", req.SiteUsersId,
-		"BusinessId", req.BusinessId,
-		"DocumentTypeId", req.DocumentTypeId,
-		"DocumentName", req.DocumentName,
-		"Description", req.Description,
-		"FileName", req.FileName,
-		"ContentType", req.ContentType,
-		"StorageKey", key,
-		"DocumentUrl", url,
+		"Filename", req.FileName,
+		"DocumentId", req.DocumentId,
+		"CustomersBusinessDocumentsId", 0,
+		// "DocumentId", req.DocumentTypeId, // if needed, add to struct and uncomment
+		// "CustomersBusinessDocumentsId", 0, // if needed, add to struct and uncomment
 	)
 
 	if dbErr != nil {
@@ -151,19 +206,25 @@ func (s *BusinessService) UploadDocument(req *UploadDocumentRequest, res *DbResu
 	}
 
 	// 3) Microservice -> gateway safe (RAW JSON string)
+	var errorsArr []ErrorResultFile
+	if strings.TrimSpace(errorsStr) != "" {
+		errorsArr = parseLegacyDbErrorString(errorsStr)
+	}
+	finalErrors := errorsStr
+	if len(errorsArr) > 0 {
+		b, _ := json.Marshal(errorsArr)
+		finalErrors = string(b)
+		status = "0"
+	} else {
+		status = "1"
+	}
 	*res = DbResultFile{
 		ID:      id,
 		Id:      id,
 		Status:  status,
 		Details: detailsStr, // RAW JSON STRING
-		Errors:  errorsStr,  // string
+		Errors:  finalErrors,
 	}
-
-	// If errors empty -> status 1 (same pattern as your sample)
-	if strings.TrimSpace(res.Errors) == "" {
-		res.Status = "1"
-	}
-
 	return nil
 }
 
@@ -320,6 +381,170 @@ func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest,
 		Status:  status,
 		Details: detailsStr,
 		Errors:  finalErrors,
+	}
+	return nil
+}
+
+// RPC method: "BusinessService.AddKYCDocumentV3"
+func (s *BusinessService) AddKYCDocumentV3(req *AddKYCDocumentRequest, res *DbResultRPC) error {
+	if res == nil {
+		return fmt.Errorf("AddKYCDocumentV3: nil response pointer")
+	}
+
+	if errs := validateAddKycDocument(req); len(errs) > 0 {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: toErrorsJSON(errs)}
+		return nil
+	}
+
+	ctx, cancel := withTimeout()
+	defer cancel()
+
+	path := businessKycDocPath(req.CustomersId)
+
+	// DELETE MODE
+	if len(req.FileBytes) == 0 {
+		if req.CustomersBusinessDocumentsId == nil {
+			*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: toErrorsJSON([]ErrorResult{{ErrorType: "BadRequest", FieldName: "File", MessageCode: "Required"}})}
+			return nil
+		}
+
+		spDetails := "v1_CustomerRole_BusinessModule_GetKYCDocumentDetails"
+		var detailsStr string
+		fmt.Printf("[AddKYCDocumentV3] Calling SP: %s\nParams: %+v\n", spDetails, map[string]interface{}{
+			"@CustomersId":                  req.CustomersId,
+			"@SiteUsersId":                  req.SiteUsersId,
+			"@DocumentId":                   req.DocumentId,
+			"@CustomersBusinessDocumentsId": *req.CustomersBusinessDocumentsId,
+		})
+		_, _, _, err := dbGetSPResult(ctx, spDetails, &detailsStr, map[string]interface{}{
+			"@CustomersId":                  req.CustomersId,
+			"@SiteUsersId":                  req.SiteUsersId,
+			"@DocumentId":                   req.DocumentId,
+			"@CustomersBusinessDocumentsId": *req.CustomersBusinessDocumentsId,
+		})
+		if err != nil {
+			*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+			return nil
+		}
+
+		var dto struct {
+			Details UploadedDocumentDetails `json:"details"`
+		}
+		var raw any
+		_ = json.Unmarshal([]byte(detailsStr), &raw)
+		fileName := ""
+		var d UploadedDocumentDetails
+		if json.Unmarshal([]byte(detailsStr), &d) == nil && d.FileName != "" {
+			fileName = d.FileName
+		} else {
+			if json.Unmarshal([]byte(detailsStr), &dto) == nil && dto.Details.FileName != "" {
+				fileName = dto.Details.FileName
+			}
+		}
+		if fileName != "" {
+			blobName := businessKycDocName(req.CustomersId, req.SiteUsersId, fileName)
+			_ = StorageDeleteIfExists(path+blobName, AzureBlobSecureRootContainerName())
+		}
+
+		spDelete := "v1_CustomerRole_BusinessModule_DeleteKYCDocument"
+		var delDetails string
+		fmt.Printf("[AddKYCDocumentV3] Calling SP: %s\nParams: %+v\n", spDelete, map[string]interface{}{
+			"@CustomersId":                  req.CustomersId,
+			"@SiteUsersId":                  req.SiteUsersId,
+			"@CustomersBusinessDocumentsId": *req.CustomersBusinessDocumentsId,
+		})
+		delId, delStatus, delErrStr, delErr := dbGetSPResult(ctx, spDelete, &delDetails, map[string]interface{}{
+			"@CustomersId":                  req.CustomersId,
+			"@SiteUsersId":                  req.SiteUsersId,
+			"@CustomersBusinessDocumentsId": *req.CustomersBusinessDocumentsId,
+		})
+		if delErr != nil {
+			*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: delErr.Error()}
+			return nil
+		}
+		*res = DbResultRPC{ID: delId, Id: delId, Status: delStatus, Details: delDetails, Errors: delErrStr}
+		if strings.TrimSpace(res.Errors) == "" {
+			res.Status = "1"
+		}
+		return nil
+	}
+
+	// UPLOAD MODE
+	if e := validateFileTypeAndExt(req.ContentType, req.FileName); e != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: toErrorsJSON([]ErrorResult{*e})}
+		return nil
+	}
+
+	spValidate := "v1_CustomerRole_BusinessModule_ValidateKYCDocumentUpload"
+	var validateDetails string
+	fmt.Printf("[AddKYCDocumentV3] Calling SP: %s\nParams: %+v\n", spValidate, map[string]interface{}{
+		"@CustomersId":                  req.CustomersId,
+		"@SiteUsersId":                  req.SiteUsersId,
+		"@DocumentId":                   req.DocumentId,
+		"@Filename":                     req.FileName,
+		"@CustomersBusinessDocumentsId": req.CustomersBusinessDocumentsId,
+	})
+	_, vStatus, vErrorsStr, vErr := dbGetSPResult(ctx, spValidate, &validateDetails, map[string]interface{}{
+		"@CustomersId":                  req.CustomersId,
+		"@SiteUsersId":                  req.SiteUsersId,
+		"@DocumentId":                   req.DocumentId,
+		"@Filename":                     req.FileName,
+		"@CustomersBusinessDocumentsId": req.CustomersBusinessDocumentsId,
+	})
+	if vErr != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: vErr.Error()}
+		return nil
+	}
+	if vStatus != "1" {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: vStatus, Details: validateDetails, Errors: vErrorsStr}
+		if strings.TrimSpace(res.Errors) == "" {
+			res.Status = "1"
+		}
+		return nil
+	}
+
+	blobName := businessKycDocName(req.CustomersId, req.SiteUsersId, req.FileName)
+	ok, storageErrs := StorageSaveOrOverwrite(path+blobName, req.ContentType, req.FileBytes, AzureBlobSecureRootContainerName())
+	if !ok {
+		*res = DbResultRPC{
+			ID: 0, Id: 0, Status: "0", Details: "",
+			Errors: toErrorsJSON([]ErrorResult{{ErrorType: "BadRequest", FieldName: "File", MessageCode: "Upload_Failed"}}),
+		}
+		_ = storageErrs
+		return nil
+	}
+
+	spComplete := "v1_CustomerRole_BusinessModule_CompleteKYCDocumentUpload"
+	var completeDetails string
+	fmt.Printf("[AddKYCDocumentV3] Calling SP: %s\nParams: %+v\n", spComplete, map[string]interface{}{
+		"@CustomersId":                  req.CustomersId,
+		"@SiteUsersId":                  req.SiteUsersId,
+		"@DocumentId":                   req.DocumentId,
+		"@Note":                         req.Note,
+		"@bDocumentUploaded":            true,
+		"@Filename":                     req.FileName,
+		"@CustomersBusinessDocumentsId": req.CustomersBusinessDocumentsId,
+	})
+	cId, cStatus, cErrorsStr, cErr := dbGetSPResult(ctx, spComplete, &completeDetails, map[string]interface{}{
+		"@CustomersId":                  req.CustomersId,
+		"@SiteUsersId":                  req.SiteUsersId,
+		"@DocumentId":                   req.DocumentId,
+		"@Note":                         req.Note,
+		"@bDocumentUploaded":            true,
+		"@Filename":                     req.FileName,
+		"@CustomersBusinessDocumentsId": req.CustomersBusinessDocumentsId,
+	})
+	if cErr != nil {
+		_ = StorageDeleteIfExists(path+blobName, AzureBlobSecureRootContainerName())
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: cErr.Error()}
+		return nil
+	}
+	if cStatus != "1" {
+		_ = StorageDeleteIfExists(path+blobName, AzureBlobSecureRootContainerName())
+	}
+	*res = DbResultRPC{ID: cId, Id: cId, Status: cStatus, Details: completeDetails, Errors: cErrorsStr}
+	if strings.TrimSpace(res.Errors) == "" {
+		res.Status = "1"
 	}
 	return nil
 }
