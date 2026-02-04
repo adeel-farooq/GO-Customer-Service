@@ -246,3 +246,46 @@ func parseDetailsJSON(detailsStr string) any {
 	}
 	return out
 }
+func toCamelCase(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+
+	// Handle snake_case, PascalCase, etc
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' '
+	})
+
+	for i := range parts {
+		if i == 0 {
+			parts[i] = strings.ToLower(parts[i][:1]) + parts[i][1:]
+		} else {
+			parts[i] = strings.ToUpper(parts[i][:1]) + strings.ToLower(parts[i][1:])
+		}
+	}
+
+	return strings.Join(parts, "")
+}
+func mapKeysToCamelCase(data interface{}) interface{} {
+	switch v := data.(type) {
+
+	case map[string]interface{}:
+		mapped := make(map[string]interface{}, len(v))
+		for key, value := range v {
+			camelKey := toCamelCase(key)
+			mapped[camelKey] = mapKeysToCamelCase(value)
+		}
+		return mapped
+
+	case []interface{}:
+		for i := range v {
+			v[i] = mapKeysToCamelCase(v[i])
+		}
+		return v
+
+	default:
+		// string, number, bool, nil
+		return v
+	}
+}

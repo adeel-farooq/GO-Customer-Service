@@ -2,6 +2,7 @@ package restricted
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -9,12 +10,8 @@ import (
 
 // RPC method: "RestrictedService.GetRegistrationDetails"
 // Returns raw JSON string in Details and raw error string in Errors.
-func (s *RestrictedService) GetRegistrationDetails(_ *struct{}, res *DbResultRPC) error {
-	if res == nil {
-		return fmt.Errorf("GetRegistrationDetails: nil response pointer")
-	}
-
-	ctx, cancel := withTimeout()
+func (s *RestrictedService) GetRegistrationDetails(req *GetErrorMessagesRequest, res *RegistrationDetailsResult) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	sp := "v2_PublicRole_RegistrationModule_GetRegistrationDetails"
@@ -22,24 +19,92 @@ func (s *RestrictedService) GetRegistrationDetails(_ *struct{}, res *DbResultRPC
 	var detailsStr string
 	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr)
 	if err != nil {
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		*res = RegistrationDetailsResult{
+			ID:     0,
+			Status: "0",
+			Details: RegistrationDetails{
+				Countries:       []Country{},
+				ProductServices: []ProductService{},
+			},
+			Errors: []string{err.Error()},
+		}
 		return nil
 	}
 
-	*res = DbResultRPC{
+	// ✅ parse Details into typed struct
+	var details RegistrationDetails
+	if detailsStr != "" {
+		if e := json.Unmarshal([]byte(detailsStr), &details); e != nil {
+			// parsing fail -> error return as array
+			*res = RegistrationDetailsResult{
+				ID:     id,
+				Status: "0",
+				Details: RegistrationDetails{
+					Countries:       []Country{},
+					ProductServices: []ProductService{},
+				},
+				Errors: []string{"Invalid_Details_JSON"},
+			}
+			return nil
+		}
+	}
+
+	// ✅ errors string -> []string (simple rule)
+	errs := []string{}
+	if strings.TrimSpace(errorsStr) != "" && errorsStr != "[]" {
+		errs = []string{errorsStr}
+	}
+
+	if len(errs) > 0 {
+		status = "0"
+	} else if strings.TrimSpace(status) == "" {
+		status = "1"
+	}
+
+	*res = RegistrationDetailsResult{
 		ID:      id,
-		Id:      id,
 		Status:  status,
-		Details: detailsStr,
-		Errors:  errorsStr,
+		Details: details,
+		Errors:  errs,
 	}
-
-	if strings.TrimSpace(res.Errors) == "" {
-		res.Status = "1"
-	}
-
 	return nil
 }
+
+// func (s *RestrictedService) GetRegistrationDetails(_ *struct{}, res *DbResultRPC) error {
+// 	if res == nil {
+// 		return fmt.Errorf("GetRegistrationDetails: nil response pointer")
+// 	}
+
+// 	ctx, cancel := withTimeout()
+// 	defer cancel()
+
+// 	sp := "v2_PublicRole_RegistrationModule_GetRegistrationDetails"
+
+// 	var detailsStr string
+// 	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr)
+// 	if err != nil {
+// 		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+// 		return nil
+// 	}
+// 	var parsed any
+// 	if err := json.Unmarshal([]byte(detailsStr), &parsed); err == nil {
+// 		parsed = mapKeysToCamelCase(parsed)
+// 		b, _ := json.Marshal(parsed)
+// 		detailsStr = string(b)
+// 	}
+
+// 	*res = DbResultRPC{
+// 		ID: id, Id: id, Status: status,
+// 		Details: detailsStr,
+// 		Errors:  errorsStr, // string bhi chalega because interface{}
+// 	}
+
+// 	if strings.TrimSpace(res.Errors) == "" {
+// 		res.Status = "1"
+// 	}
+
+// 	return nil
+// }
 
 func (s *RestrictedService) GetErrorMessages(req *GetErrorMessagesRequest, res *DbResult) error {
 	// start := time.Now()
@@ -84,46 +149,47 @@ func (s *RestrictedService) GetErrorMessages(req *GetErrorMessagesRequest, res *
 
 	return nil
 }
-func (s *RestrictedService) GetCountryANDProduct(req *GetErrorMessagesRequest, res *DbResultRPC) error {
-	start := time.Now()
 
-	if res == nil {
-		return fmt.Errorf("GetCountryANDProduct: nil response pointer")
-	}
+// func (s *RestrictedService) GetCountryANDProduct(req *GetErrorMessagesRequest, res *DbResultRPC) error {
+// 	start := time.Now()
 
-	if req == nil {
-		*res = DbResultRPC{
-			ID: 0, Id: 0, Status: "0",
-			Details: "",
-			Errors:  "Invalid_JSON",
-		}
-		return nil
-	}
+// 	if res == nil {
+// 		return fmt.Errorf("GetCountryANDProduct: nil response pointer")
+// 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+// 	if req == nil {
+// 		*res = DbResultRPC{
+// 			ID: 0, Id: 0, Status: "0",
+// 			Details: "",
+// 			Errors:  "Invalid_JSON",
+// 		}
+// 		return nil
+// 	}
 
-	// SP returns JSON string in Details column
-	var detailsStr string
+// 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// 	defer cancel()
 
-	id, status, errorsStr, err := dbGetSPResult(ctx, "v2_PublicRole_RegistrationModule_GetRegistrationDetails", &detailsStr)
-	if err != nil {
-		logDbFailure("v2_PublicRole_RegistrationModule_GetRegistrationDetails", err, time.Since(start))
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
-		return nil
-	}
+// 	// SP returns JSON string in Details column
+// 	var detailsStr string
 
-	*res = DbResultRPC{
-		ID:      id,
-		Id:      id,
-		Status:  status,
-		Details: detailsStr, // ✅ raw JSON string
-		Errors:  errorsStr,  // ✅ raw error string
-	}
+// 	id, status, errorsStr, err := dbGetSPResult(ctx, "v2_PublicRole_RegistrationModule_GetRegistrationDetails", &detailsStr)
+// 	if err != nil {
+// 		logDbFailure("v2_PublicRole_RegistrationModule_GetRegistrationDetails", err, time.Since(start))
+// 		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+// 		return nil
+// 	}
 
-	if strings.TrimSpace(errorsStr) == "" {
-		res.Status = "1"
-	}
+// 	*res = DbResultRPC{
+// 		ID:      id,
+// 		Id:      id,
+// 		Status:  status,
+// 		Details: detailsStr, // ✅ raw JSON string
+// 		Errors:  errorsStr,  // ✅ raw error string
+// 	}
 
-	return nil
-}
+// 	if strings.TrimSpace(errorsStr) == "" {
+// 		res.Status = "1"
+// 	}
+
+// 	return nil
+// }
