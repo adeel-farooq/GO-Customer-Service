@@ -24,6 +24,11 @@ type GetVerificationFormRequest struct {
 	SiteUsersId int64 `json:"siteUsersId"`
 }
 
+type GetBusinessVerificationStatusRequest struct {
+	CustomersId int64 `json:"customersId"`
+	SiteUsersId int64 `json:"siteUsersId"`
+}
+
 // These match .NET GetVerificationFormDto JSON shape.
 // We keep fields flexible: FormData is raw JSON.
 type GetVerificationFormDto struct {

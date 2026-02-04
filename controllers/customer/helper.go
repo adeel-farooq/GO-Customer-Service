@@ -1031,12 +1031,13 @@ func UploadToStorage(fileName string, contentType string, fileBytes []byte) (sto
 func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedParams ...any) (id int64, status string, errorsStr string, err error) {
 	// Only allow known SPs
 	allowedSPs := map[string]bool{
-		"v1_CustomerRole_BusinessModule_GetKYCDocumentList":        true,
-		"v1_CustomerRole_BusinessModule_ValidateKYCDocumentUpload": true,
-		"v1_CustomerRole_BusinessModule_CompleteKYCDocumentUpload": true,
-		"v1_CustomerRole_BusinessModule_GetKYCDocumentDetails":     true,
-		"v1_CustomerRole_BusinessModule_DeleteKYCDocument":         true,
-		"V3_CustomerRole_BusinessModule_GetVerificationForm":       true,
+		"v1_CustomerRole_BusinessModule_GetKYCDocumentList":            true,
+		"v1_CustomerRole_BusinessModule_ValidateKYCDocumentUpload":     true,
+		"v1_CustomerRole_BusinessModule_CompleteKYCDocumentUpload":     true,
+		"v1_CustomerRole_BusinessModule_GetKYCDocumentDetails":         true,
+		"v1_CustomerRole_BusinessModule_DeleteKYCDocument":             true,
+		"V3_CustomerRole_BusinessModule_GetVerificationForm":           true,
+		"v2_CustomerRole_BusinessModule_GetBusinessVerificationStatus": true,
 	}
 	if !allowedSPs[sp] {
 		return 0, "0", "SP not implemented or does not exist", fmt.Errorf("SP not implemented: %s", sp)
@@ -1054,9 +1055,24 @@ func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedPara
 	} else if len(namedParams)%2 == 0 {
 		for i := 0; i < len(namedParams); i += 2 {
 			k, _ := namedParams[i].(string)
+			k = strings.TrimPrefix(k, "@")
 			params[k] = namedParams[i+1]
 		}
 	}
+
+	// Normalize keys (some legacy code passes "@CustomersId"; ExecSPDbResult adds '@' itself)
+	normalized := map[string]any{}
+	for k, v := range params {
+		kTrim := strings.TrimPrefix(k, "@")
+		// If both forms exist, prefer the non-@ key
+		if strings.HasPrefix(k, "@") {
+			if _, ok := params[kTrim]; ok {
+				continue
+			}
+		}
+		normalized[kTrim] = v
+	}
+	params = normalized
 
 	dbRes, err := ExecSPDbResult(ctx, sp, params)
 	if err != nil {
