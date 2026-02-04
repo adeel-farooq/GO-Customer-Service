@@ -3,6 +3,7 @@ package registerMethods
 import (
 	"go-cloud-customer/controllers/authmodule"
 	"go-cloud-customer/controllers/customer"
+	"go-cloud-customer/controllers/profile"
 	"go-cloud-customer/controllers/restricted"
 	"go-cloud-customer/services"
 	"log"
@@ -57,5 +58,11 @@ func RegisterCustomerServices(rpcServer *rpc.Server) {
 	// if err != nil {
 	// 	log.Fatalf("Error registering restricted alias service: %v", err)
 	// }
+
+	/* Register profile module services */
+	err = rpcServer.Register(new(profile.ProfileService))
+	if err != nil {
+		log.Fatalf("Error registering profile service: %v", err)
+	}
 
 }
