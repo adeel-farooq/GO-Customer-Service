@@ -86,3 +86,26 @@ func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, params ma
 	status := dbRes.Status
 	return id, status, errorsStr, nil
 }
+func normalizeErrorsToSlice(errorsStr string) []string {
+	trimmed := strings.TrimSpace(errorsStr)
+	if trimmed == "" || trimmed == "[]" {
+		return []string{}
+	}
+
+	// if it's JSON array already
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			// ensure non-nil
+			if arr == nil {
+				return []string{}
+			}
+			return arr
+		}
+		// fallback if JSON invalid
+		return []string{errorsStr}
+	}
+
+	// legacy text
+	return []string{errorsStr}
+}

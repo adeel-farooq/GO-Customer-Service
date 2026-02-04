@@ -9,13 +9,20 @@ import (
 type ProfileService struct{}
 
 // RPC name: "ProfileService.GetUserInfo"
-func (s *ProfileService) GetUserInfo(req *GetUserInfoRequest, res *DbResultRPC) error {
+func (s *ProfileService) GetUserInfo(req *GetUserInfoRequest, res *GetUserInfoResult) error {
 	if res == nil {
 		return fmt.Errorf("GetUserInfo: nil response pointer")
 	}
+
+	// nil req -> standard bad request
 	if req == nil {
 		bad := []ErrorResultDto{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: errorsJSON(bad)}
+		*res = GetUserInfoResult{
+			ID:      0,
+			Status:  "0",
+			Details: GetUserInfo{},
+			Errors:  []string{string(errorsJSON(bad))}, // if errorsJSON returns []byte or string
+		}
 		return nil
 	}
 
@@ -30,24 +37,40 @@ func (s *ProfileService) GetUserInfo(req *GetUserInfoRequest, res *DbResultRPC) 
 		"@CustomersID":      req.CustomersId,
 	})
 	if err != nil {
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		*res = GetUserInfoResult{ID: 0, Status: "0", Details: GetUserInfo{}, Errors: []string{err.Error()}}
 		return nil
 	}
 
-	finalErrors := errorsStr
-	statusOut := status
-	if strings.TrimSpace(errorsStr) == "" {
-		statusOut = "1"
-	} else {
-		statusOut = "0"
-		trimmed := strings.TrimSpace(errorsStr)
-		if !strings.HasPrefix(trimmed, "[") {
-			parsed := parseLegacyDbErrorString(errorsStr)
-			b, _ := json.Marshal(parsed)
-			finalErrors = string(b)
+	// ✅ Parse details JSON -> struct (important for gob + frontend)
+	var details GetUserInfo
+	if strings.TrimSpace(detailsStr) != "" {
+		if e := json.Unmarshal([]byte(detailsStr), &details); e != nil {
+			*res = GetUserInfoResult{
+				ID:      id,
+				Status:  "0",
+				Details: GetUserInfo{},
+				Errors:  []string{"Invalid_Details_JSON"},
+			}
+			return nil
 		}
 	}
 
-	*res = DbResultRPC{ID: id, Id: id, Status: statusOut, Details: detailsStr, Errors: finalErrors}
+	// ✅ Errors normalize -> []string
+	errs := normalizeErrorsToSlice(errorsStr)
+
+	// ✅ Status rule: errors empty -> 1 else 0 (tumhari existing logic)
+	statusOut := strings.TrimSpace(status)
+	if len(errs) == 0 {
+		statusOut = "1"
+	} else {
+		statusOut = "0"
+	}
+
+	*res = GetUserInfoResult{
+		ID:      id,
+		Status:  statusOut,
+		Details: details,
+		Errors:  errs,
+	}
 	return nil
 }

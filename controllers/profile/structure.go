@@ -5,17 +5,38 @@ type GetUserInfoRequest struct {
 	CustomersId int64 `json:"customersId"`
 }
 
-// gob-safe: keep Details/Errors as string
-type DbResultRPC struct {
-	ID      int64  `json:"id"`
-	Id      int64  `json:"Id"`
-	Status  string `json:"status"`
-	Details string `json:"details"` // RAW JSON string
-	Errors  string `json:"errors"`  // DB error string/JSON array string or ""
+// gob-safe: concrete types on both sides
+type GetUserInfoResult struct {
+	ID      int64       `json:"id"`
+	Details GetUserInfo `json:"details"`
+	Status  string      `json:"status"`
+	Errors  []string    `json:"errors"`
 }
 
 type ErrorResultDto struct {
 	ErrorType   string `json:"errorType"`
 	FieldName   string `json:"fieldName"`
 	MessageCode string `json:"messageCode"`
+}
+
+type GetUserInfo struct {
+	ID                             int    `json:"id"`
+	FirstName                      string `json:"firstName"`
+	LastName                       string `json:"lastName"`
+	AccountType                    string `json:"accountType"`
+	BAccountSwitchAvailable        bool   `json:"bAccountSwitchAvailable"`
+	BRequiresApprovalToCreatePayee bool   `json:"bRequiresApprovalToCreatePayee"`
+	BMainAccountHolder             bool   `json:"bMainAccountHolder"`
+	CustomerUsersCustomersId       int    `json:"customerUsersCustomersId"`
+	OnboardingVersion              string `json:"onboardingVersion"`
+	OtcDeskVersion                 string `json:"otcDeskVersion"`
+	BCanBulkTransfer               bool   `json:"bCanBulkTransfer"`
+	BCanReverseTransfer            bool   `json:"bCanReverseTransfer"`
+	BFinancialInstitution          bool   `json:"bFinancialInstitution"`
+	BPushToCardEnabled             bool   `json:"bPushToCardEnabled"`
+	BExtendedUserList              bool   `json:"bExtendedUserList"`
+	BQuickCryptoSaleEnabled        bool   `json:"bQuickCryptoSaleEnabled"`
+	BNetworkDiscoverable           bool   `json:"bNetworkDiscoverable"`
+	NetworkID                      string `json:"networkID"`
+	ProductServices                string `json:"productServices"`
 }
