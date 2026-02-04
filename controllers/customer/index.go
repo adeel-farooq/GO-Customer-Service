@@ -617,6 +617,53 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *GetBusinessVerifica
 	return nil
 }
 
+// RPC: "BusinessV3Service.GetDropdownData" (alias points to BusinessService)
+func (s *BusinessService) GetDropdownData(req *GetDropdownDataRequest, res *DbResultRPC) error {
+	if res == nil {
+		return fmt.Errorf("GetDropdownData: nil response pointer")
+	}
+	if req == nil {
+		bad := []ErrorResultDto{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
+		b, _ := json.Marshal(bad)
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: string(b)}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sp := "v2_CustomerRole_BusinessModule_GetDropdownData"
+	var detailsStr string
+	id, status, errorsStr, err := dbGetSPResult(
+		ctx,
+		sp,
+		&detailsStr,
+		"CustomersId", req.CustomersId,
+		"SiteUsersId", req.SiteUsersId,
+	)
+	if err != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		return nil
+	}
+
+	finalErrors := errorsStr
+	statusOut := status
+	if strings.TrimSpace(errorsStr) == "" {
+		statusOut = "1"
+	} else {
+		statusOut = "0"
+		trimmed := strings.TrimSpace(errorsStr)
+		if !strings.HasPrefix(trimmed, "[") {
+			parsed := parseLegacyDbErrorString(errorsStr)
+			b, _ := json.Marshal(parsed)
+			finalErrors = string(b)
+		}
+	}
+
+	*res = DbResultRPC{ID: id, Id: id, Status: statusOut, Details: detailsStr, Errors: finalErrors}
+	return nil
+}
+
 // RPC method: "BusinessService.AddKYCDocumentV3"
 func (s *BusinessService) AddKYCDocumentV3(req *AddKYCDocumentRequest, res *DbResultRPC) error {
 	if res == nil {

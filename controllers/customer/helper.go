@@ -1038,6 +1038,7 @@ func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedPara
 		"v1_CustomerRole_BusinessModule_DeleteKYCDocument":             true,
 		"V3_CustomerRole_BusinessModule_GetVerificationForm":           true,
 		"v2_CustomerRole_BusinessModule_GetBusinessVerificationStatus": true,
+		"v2_CustomerRole_BusinessModule_GetDropdownData":               true,
 	}
 	if !allowedSPs[sp] {
 		return 0, "0", "SP not implemented or does not exist", fmt.Errorf("SP not implemented: %s", sp)
