@@ -146,12 +146,17 @@ func (s *BusinessService) SubmitVerificationForm(req *SubmitVerificationFormRequ
 }
 
 // DocumentGroupList RPC method
-func (s *BusinessService) DocumentGroupList(req *GetDocumentGroupListRequest, res *DbResultRPC) error {
+func (s *BusinessService) DocumentGroupList(req *GetDocumentGroupListRequest, res *BusinessDocumentsResult) error {
 	if res == nil {
 		return fmt.Errorf("DocumentGroupList: nil response pointer")
 	}
 	if req == nil {
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: `[{"errorType":"BadRequest","fieldName":"Json","messageCode":"Invalid_Json"}]`}
+		*res = BusinessDocumentsResult{
+			ID:      0,
+			Status:  "0",
+			Details: []BusinessDocumentGroup{},
+			Errors:  []ErrorItem{{FieldName: "Json", MessageCode: "Invalid_Json"}},
+		}
 		return nil
 	}
 
@@ -159,47 +164,58 @@ func (s *BusinessService) DocumentGroupList(req *GetDocumentGroupListRequest, re
 	defer cancel()
 
 	sp := "v1_CustomerRole_BusinessModule_GetKYCDocumentList"
+
 	var detailsStr string
-	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr, map[string]interface{}{
+	id, _, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr, map[string]any{
 		"CustomersId": req.CustomersId,
 		"SiteUsersId": req.SiteUsersId,
 	})
 	if err != nil {
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		*res = BusinessDocumentsResult{
+			ID:      0,
+			Status:  "0",
+			Details: []BusinessDocumentGroup{},
+			Errors:  []ErrorItem{{FieldName: "Db", MessageCode: "Unexpected_Error"}},
+		}
 		return nil
 	}
 
-	if strings.TrimSpace(errorsStr) == "" {
-		status = "1"
-	}
-
-	groupedJSON := detailsStr
-	if strings.TrimSpace(detailsStr) != "" {
-		if out, ok := buildGroupsFromDocumentList(detailsStr); ok {
-			groupedJSON = out
-		}
-	}
-
-	// Parse errors to array of objects if not empty
-	var errorsArr []ErrorResultFile
+	// ✅ DB errors -> structured errors array
 	if strings.TrimSpace(errorsStr) != "" {
-		errorsArr = parseLegacyDbErrorString(errorsStr)
-	}
-	finalErrors := errorsStr
-	if len(errorsArr) > 0 {
-		*res = DbResultRPC{
-			ID: 0, Id: 0, Status: "0",
-			Details: "",
-			Errors:  errorsJSON(OneError("BadRequest", "Json", "Invalid_Json")),
+		errorsArr := parseLegacyDbErrorString(errorsStr)
+		errItems := errorResultFilesToErrorItems(errorsArr)
+		if len(errItems) == 0 {
+			errItems = []ErrorItem{{FieldName: "Db", MessageCode: strings.TrimSpace(errorsStr)}}
+		}
+		*res = BusinessDocumentsResult{
+			ID:      int(id),
+			Status:  "0",
+			Details: []BusinessDocumentGroup{},
+			Errors:  errItems,
 		}
 		return nil
 	}
-	*res = DbResultRPC{
-		ID:      id,
-		Id:      id,
-		Status:  status,
-		Details: groupedJSON,
-		Errors:  finalErrors,
+
+	// ✅ Parse detailsStr as FLAT docs list
+	flatDocs, ok := parseFlatBusinessDocuments(detailsStr)
+	if !ok {
+		*res = BusinessDocumentsResult{
+			ID:      int(id),
+			Status:  "0",
+			Details: []BusinessDocumentGroup{},
+			Errors:  []ErrorItem{{FieldName: "Details", MessageCode: "Invalid_Json"}},
+		}
+		return nil
+	}
+
+	// ✅ Group by category (helper returns []BusinessDocumentGroup)
+	grouped := GroupDocumentsByCategory(flatDocs)
+
+	*res = BusinessDocumentsResult{
+		ID:      int(id),
+		Status:  "1",
+		Details: grouped,
+		Errors:  []ErrorItem{}, // ALWAYS []
 	}
 	return nil
 }

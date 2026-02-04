@@ -101,15 +101,271 @@ func buildGroupsFromDocumentList(detailsStr string) (string, bool) {
 	return string(b), true
 }
 
+func errorResultFilesToErrorItems(in []ErrorResultFile) []ErrorItem {
+	if len(in) == 0 {
+		return []ErrorItem{}
+	}
+	out := make([]ErrorItem, 0, len(in))
+	for _, e := range in {
+		out = append(out, ErrorItem{FieldName: e.FieldName, MessageCode: e.MessageCode})
+	}
+	return out
+}
+
+func parseBusinessDocumentGroups(detailsStr string) ([]BusinessDocumentGroup, bool) {
+	detailsStr = strings.TrimSpace(detailsStr)
+	if detailsStr == "" || detailsStr == "null" {
+		return []BusinessDocumentGroup{}, true
+	}
+
+	// 1) already grouped list
+	var direct []BusinessDocumentGroup
+	if err := json.Unmarshal([]byte(detailsStr), &direct); err == nil {
+		for i := range direct {
+			if direct[i].Documents == nil {
+				direct[i].Documents = []BusinessDocument{}
+			}
+		}
+		return direct, true
+	}
+
+	// 2) wrapper objects
+	var wrapper struct {
+		Details []BusinessDocumentGroup `json:"details"`
+		Groups  []BusinessDocumentGroup `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(detailsStr), &wrapper); err == nil {
+		if wrapper.Details != nil {
+			for i := range wrapper.Details {
+				if wrapper.Details[i].Documents == nil {
+					wrapper.Details[i].Documents = []BusinessDocument{}
+				}
+			}
+			return wrapper.Details, true
+		}
+		if wrapper.Groups != nil {
+			for i := range wrapper.Groups {
+				if wrapper.Groups[i].Documents == nil {
+					wrapper.Groups[i].Documents = []BusinessDocument{}
+				}
+			}
+			return wrapper.Groups, true
+		}
+	}
+
+	// 3) listData-like: group flat rows into categories
+	var root any
+	if err := json.Unmarshal([]byte(detailsStr), &root); err != nil {
+		return nil, false
+	}
+	rows := extractListData(root)
+	if rows == nil {
+		return nil, false
+	}
+
+	type groupAgg struct{ g BusinessDocumentGroup }
+	agg := map[string]*groupAgg{}
+	orderKeys := make([]string, 0, 16)
+	for _, row := range rows {
+		categoryName := firstNonEmptyString(
+			getStringAnyCase(row, "documentCategory"),
+			getStringAnyCase(row, "DocumentCategory"),
+			getStringAnyCase(row, "categoryName"),
+			getStringAnyCase(row, "CategoryName"),
+			getStringAnyCase(row, "documentGroupName"),
+			getStringAnyCase(row, "DocumentGroupName"),
+		)
+		if strings.TrimSpace(categoryName) == "" {
+			categoryName = "Business Documents"
+		}
+
+		explicitKey := strings.TrimSpace(firstNonEmptyString(
+			getStringAnyCase(row, "categoryKey"),
+			getStringAnyCase(row, "CategoryKey"),
+		))
+		categoryKey := explicitKey
+		if categoryKey == "" || strings.EqualFold(categoryKey, categoryName) {
+			categoryKey = categoryKeyFromName(categoryName)
+		}
+		if strings.TrimSpace(categoryKey) == "" {
+			categoryKey = "BusinessDocuments"
+		}
+
+		categoryOrder := firstNonZeroInt(
+			getIntAnyCase(row, "order"),
+			getIntAnyCase(row, "Order"),
+			getIntAnyCase(row, "categoryOrder"),
+			getIntAnyCase(row, "CategoryOrder"),
+		)
+		if categoryOrder == 0 {
+			categoryOrder = defaultDocumentCategoryOrder(categoryKey, categoryName)
+		}
+
+		a := agg[categoryKey]
+		if a == nil {
+			a = &groupAgg{g: BusinessDocumentGroup{CategoryKey: categoryKey, CategoryName: categoryName, Order: categoryOrder, Documents: []BusinessDocument{}}}
+			agg[categoryKey] = a
+			orderKeys = append(orderKeys, categoryKey)
+		} else {
+			// keep first non-empty name/order
+			if strings.TrimSpace(a.g.CategoryName) == "" && strings.TrimSpace(categoryName) != "" {
+				a.g.CategoryName = categoryName
+			}
+			if a.g.Order == 0 && categoryOrder != 0 {
+				a.g.Order = categoryOrder
+			}
+		}
+
+		// Convert row -> BusinessDocument (best-effort)
+		b, _ := json.Marshal(row)
+		var doc BusinessDocument
+		if err := json.Unmarshal(b, &doc); err == nil {
+			a.g.Documents = append(a.g.Documents, doc)
+		}
+	}
+
+	// Build deterministic output
+	out := make([]BusinessDocumentGroup, 0, len(orderKeys))
+	for _, k := range orderKeys {
+		out = append(out, agg[k].g)
+	}
+	for i := range out {
+		if out[i].Documents == nil {
+			out[i].Documents = []BusinessDocument{}
+		}
+		sort.SliceStable(out[i].Documents, func(a, b int) bool {
+			if out[i].Documents[a].OrderNumber != out[i].Documents[b].OrderNumber {
+				return out[i].Documents[a].OrderNumber < out[i].Documents[b].OrderNumber
+			}
+			return out[i].Documents[a].DocumentId < out[i].Documents[b].DocumentId
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Order != out[j].Order {
+			// 0 goes last
+			if out[i].Order == 0 {
+				return false
+			}
+			if out[j].Order == 0 {
+				return true
+			}
+			return out[i].Order < out[j].Order
+		}
+		return strings.ToLower(out[i].CategoryName) < strings.ToLower(out[j].CategoryName)
+	})
+	return out, true
+}
+
+func defaultDocumentCategoryOrder(categoryKey, categoryName string) int {
+	// Match your desired output ordering
+	if strings.EqualFold(categoryName, "Business Documents") || strings.EqualFold(categoryKey, "BusinessDocuments") {
+		return 1
+	}
+	if strings.EqualFold(categoryName, "Beneficial Owner Documents") || strings.EqualFold(categoryKey, "BeneficialOwnerDocuments") {
+		return 2
+	}
+	if strings.EqualFold(categoryName, "Financial Records") || strings.EqualFold(categoryKey, "FinancialRecords") {
+		return 3
+	}
+	if strings.EqualFold(categoryName, "Compliance Policies") || strings.EqualFold(categoryKey, "CompliancePolicies") {
+		return 4
+	}
+	return 100
+}
+
+func categoryKeyFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	parts := splitAlphaNumWords(name)
+	if len(parts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if isAllUpper(p) {
+			b.WriteString(p)
+			continue
+		}
+		r := []rune(strings.ToLower(p))
+		r[0] = unicode.ToUpper(r[0])
+		b.WriteString(string(r))
+	}
+	return b.String()
+}
+
+func splitAlphaNumWords(s string) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		out = append(out, string(cur))
+		cur = cur[:0]
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			cur = append(cur, r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return out
+}
+
+func isAllUpper(s string) bool {
+	hasLetter := false
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+			if !unicode.IsUpper(r) {
+				return false
+			}
+		}
+	}
+	return hasLetter
+}
+
 func extractListData(root any) []map[string]interface{} {
+	// case0: root is already an array
+	if arr, ok := root.([]interface{}); ok {
+		return castList(arr)
+	}
+	if arr, ok := root.([]map[string]interface{}); ok {
+		return arr
+	}
+
 	// case1: root["listData"]
 	if m, ok := root.(map[string]interface{}); ok {
 		if v, ok := m["listData"]; ok {
 			return castList(v)
 		}
+		if v, ok := m["ListData"]; ok {
+			return castList(v)
+		}
 		if d, ok := m["details"]; ok {
 			if md, ok := d.(map[string]interface{}); ok {
 				if v, ok := md["listData"]; ok {
+					return castList(v)
+				}
+				if v, ok := md["ListData"]; ok {
+					return castList(v)
+				}
+			}
+		}
+		if d, ok := m["Details"]; ok {
+			if md, ok := d.(map[string]interface{}); ok {
+				if v, ok := md["listData"]; ok {
+					return castList(v)
+				}
+				if v, ok := md["ListData"]; ok {
 					return castList(v)
 				}
 			}
@@ -119,6 +375,9 @@ func extractListData(root any) []map[string]interface{} {
 }
 
 func castList(v any) []map[string]interface{} {
+	if arr, ok := v.([]map[string]interface{}); ok {
+		return arr
+	}
 	arr, ok := v.([]interface{})
 	if !ok {
 		return nil
@@ -134,16 +393,71 @@ func castList(v any) []map[string]interface{} {
 
 func pickGroupKey(item map[string]interface{}) string {
 	// try common keys
-	if v, ok := item["documentGroupName"]; ok {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return s
-		}
+	if s := strings.TrimSpace(getStringAnyCase(item, "documentGroupName")); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(getStringAnyCase(item, "DocumentGroupName")); s != "" {
+		return s
 	}
 	if v, ok := item["documentGroupId"]; ok {
 		return fmt.Sprintf("group_%v", v)
 	}
+	if v, ok := item["DocumentGroupId"]; ok {
+		return fmt.Sprintf("group_%v", v)
+	}
 	// fallback
 	return "default"
+}
+
+func getStringAnyCase(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
+func getIntAnyCase(m map[string]interface{}, key string) int {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case json.Number:
+		i, _ := t.Int64()
+		return int(i)
+	case string:
+		i, _ := strconv.Atoi(strings.TrimSpace(t))
+		return i
+	default:
+		return 0
+	}
+}
+
+func firstNonEmptyString(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstNonZeroInt(vals ...int) int {
+	for _, v := range vals {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func businessKycDocPath(customersId int64) string {
@@ -1444,4 +1758,77 @@ func buildFormDataFromRaw(raw string) (json.RawMessage, bool) {
 // helper: raw json string -> gateway-shaped JSON (typed + correct keys)
 func ParseRawFormData(raw string) (json.RawMessage, bool) {
 	return buildFormDataFromRaw(raw)
+}
+func GroupDocumentsByCategory(
+	flat []FlatBusinessDocument,
+) []BusinessDocumentGroup {
+
+	groups := make([]BusinessDocumentGroup, 0)
+	groupIndex := make(map[string]int) // categoryName -> index in groups
+
+	order := 1
+
+	for _, d := range flat {
+		cat := strings.TrimSpace(d.DocumentCategory)
+		if cat == "" {
+			cat = "Uncategorized"
+		}
+
+		idx, exists := groupIndex[cat]
+
+		// create new category group if not exists
+		if !exists {
+			groups = append(groups, BusinessDocumentGroup{
+				CategoryKey:  strings.ReplaceAll(cat, " ", ""),
+				CategoryName: cat,
+				Order:        order,
+				Documents:    []BusinessDocument{},
+			})
+			idx = len(groups) - 1
+			groupIndex[cat] = idx
+			order++
+		}
+
+		// push document into group
+		groups[idx].Documents = append(groups[idx].Documents, BusinessDocument{
+			DocumentId:                   d.DocumentId,
+			Name:                         d.Name,
+			OrderNumber:                  d.OrderNumber,
+			DocumentStatus:               d.DocumentStatus,
+			DocumentStatusString:         d.DocumentStatusString,
+			BAlwaysRequired:              d.BAlwaysRequired,
+			DocumentNotes:                d.DocumentNotes,
+			UploadNotes:                  nil,
+			RejectionReason:              nil,
+			BIsAdditionalDocument:        d.BIsAdditionalDocument,
+			CustomersBusinessDocumentsId: d.CustomersBusinessDocumentsId,
+			Filename:                     d.Filename,
+			DocumentCategory:             cat,
+		})
+	}
+
+	// optional: sort documents inside each category
+	for i := range groups {
+		sort.SliceStable(groups[i].Documents, func(a, b int) bool {
+			return groups[i].Documents[a].OrderNumber <
+				groups[i].Documents[b].OrderNumber
+		})
+	}
+
+	return groups
+}
+func parseFlatBusinessDocuments(detailsStr string) ([]FlatBusinessDocument, bool) {
+	detailsStr = strings.TrimSpace(detailsStr)
+	if detailsStr == "" {
+		return []FlatBusinessDocument{}, true
+	}
+
+	var out []FlatBusinessDocument
+	if err := json.Unmarshal([]byte(detailsStr), &out); err != nil {
+		return nil, false
+	}
+	if out == nil {
+		out = []FlatBusinessDocument{}
+	}
+	return out, true
 }

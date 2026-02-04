@@ -697,3 +697,52 @@ type SaveVerificationFormResult struct {
 	Status  string                       `json:"status"`
 	Errors  []ErrorItem                  `json:"errors"`
 }
+
+type BusinessDocumentsResult struct {
+	ID      int                     `json:"id"`
+	Details []BusinessDocumentGroup `json:"details"`
+	Status  string                  `json:"status"`
+	Errors  []ErrorItem             `json:"errors"`
+}
+
+// ===== Details: category/group =====
+
+type BusinessDocumentGroup struct {
+	CategoryKey  string             `json:"categoryKey"`
+	CategoryName string             `json:"categoryName"`
+	Order        int                `json:"order"`
+	Documents    []BusinessDocument `json:"documents"`
+}
+
+// ===== Individual document =====
+
+type BusinessDocument struct {
+	DocumentId                   int     `json:"documentId"`
+	Name                         string  `json:"name"`
+	OrderNumber                  int     `json:"orderNumber"`
+	DocumentStatus               int     `json:"documentStatus"`
+	DocumentStatusString         string  `json:"documentStatusString"`
+	BAlwaysRequired              bool    `json:"bAlwaysRequired"`
+	DocumentNotes                string  `json:"documentNotes"`
+	UploadNotes                  *string `json:"uploadNotes"`     // null possible
+	RejectionReason              *string `json:"rejectionReason"` // null possible
+	BIsAdditionalDocument        bool    `json:"bIsAdditionalDocument"`
+	CustomersBusinessDocumentsId *int    `json:"customersBusinessDocumentsId"`
+	Filename                     *string `json:"filename"`
+	DocumentCategory             string  `json:"documentCategory"`
+}
+
+// input (flat list)
+type FlatBusinessDocument struct {
+	DocumentId                   int     `json:"DocumentId"`
+	Name                         string  `json:"Name"`
+	OrderNumber                  int     `json:"OrderNumber"`
+	DocumentStatus               int     `json:"DocumentStatus"`
+	DocumentStatusString         string  `json:"DocumentStatusString"`
+	BAlwaysRequired              bool    `json:"bAlwaysRequired"`
+	DocumentNotes                string  `json:"DocumentNotes"`
+	Filename                     *string `json:"Filename,omitempty"`
+	CustomersBusinessDocumentsId *int    `json:"CustomersBusinessDocumentsId,omitempty"`
+	BIsAdditionalDocument        bool    `json:"bIsAdditionalDocument"`
+	DocumentCategory             string  `json:"documentCategory"`
+}
