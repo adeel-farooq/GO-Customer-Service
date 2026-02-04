@@ -571,14 +571,21 @@ func (s *BusinessService) GetVerificationForm(req *GetVerificationFormRequest, r
 }
 
 // RPC: "BusinessV3Service.GetBusinessVerificationStatus" (alias points to BusinessService)
-func (s *BusinessService) GetBusinessVerificationStatus(req *GetBusinessVerificationStatusRequest, res *DbResultRPC) error {
+func (s *BusinessService) GetBusinessVerificationStatus(req *DocumentRequest, res *BusinessVerificationStatusResult) error {
 	if res == nil {
 		return fmt.Errorf("GetBusinessVerificationStatus: nil response pointer")
 	}
+
+	// req is *struct{}; nil req is possible in rpc
 	if req == nil {
-		bad := []ErrorResultDto{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
-		b, _ := json.Marshal(bad)
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: string(b)}
+		*res = BusinessVerificationStatusResult{
+			ID:     0,
+			Status: "0",
+			Details: BusinessVerificationDetails{
+				RejectedDocuments: RejectedDocuments{},
+			},
+			Errors: []string{"Invalid_Json"},
+		}
 		return nil
 	}
 
@@ -586,34 +593,59 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *GetBusinessVerifica
 	defer cancel()
 
 	sp := "v2_CustomerRole_BusinessModule_GetBusinessVerificationStatus"
+
 	var detailsStr string
-	id, status, errorsStr, err := dbGetSPResult(
-		ctx,
-		sp,
-		&detailsStr,
+	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr,
 		"CustomersId", req.CustomersId,
-		"SiteUsersId", req.SiteUsersId,
-	)
+		"SiteUsersId", req.SiteUsersId)
 	if err != nil {
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		*res = BusinessVerificationStatusResult{
+			ID:     0,
+			Status: "0",
+			Details: BusinessVerificationDetails{
+				RejectedDocuments: RejectedDocuments{},
+			},
+			Errors: []string{err.Error()},
+		}
 		return nil
 	}
 
-	finalErrors := errorsStr
-	statusOut := status
-	if strings.TrimSpace(errorsStr) == "" {
+	// ✅ Details JSON -> typed struct
+	var details BusinessVerificationDetails
+	if strings.TrimSpace(detailsStr) != "" {
+		if e := json.Unmarshal([]byte(detailsStr), &details); e != nil {
+			*res = BusinessVerificationStatusResult{
+				ID:     id,
+				Status: "0",
+				Details: BusinessVerificationDetails{
+					RejectedDocuments: RejectedDocuments{},
+				},
+				Errors: []string{"Invalid_Details_JSON"},
+			}
+			return nil
+		}
+	} else {
+		// ensure nested struct isn't nil-ish
+		details.RejectedDocuments = RejectedDocuments{}
+	}
+
+	// ✅ Errors normalize to []string (handles "", "[]", JSON array, legacy text)
+	errs := normalizeErrorsToSlice(errorsStr)
+
+	// ✅ Status rule
+	statusOut := strings.TrimSpace(status)
+	if len(errs) == 0 {
 		statusOut = "1"
 	} else {
 		statusOut = "0"
-		trimmed := strings.TrimSpace(errorsStr)
-		if !strings.HasPrefix(trimmed, "[") {
-			parsed := parseLegacyDbErrorString(errorsStr)
-			b, _ := json.Marshal(parsed)
-			finalErrors = string(b)
-		}
 	}
 
-	*res = DbResultRPC{ID: id, Id: id, Status: statusOut, Details: detailsStr, Errors: finalErrors}
+	*res = BusinessVerificationStatusResult{
+		ID:      id,
+		Status:  statusOut,
+		Details: details,
+		Errors:  errs,
+	}
 	return nil
 }
 

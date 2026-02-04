@@ -24,11 +24,6 @@ type GetVerificationFormRequest struct {
 	SiteUsersId int64 `json:"siteUsersId"`
 }
 
-type GetBusinessVerificationStatusRequest struct {
-	CustomersId int64 `json:"customersId"`
-	SiteUsersId int64 `json:"siteUsersId"`
-}
-
 type GetDropdownDataRequest struct {
 	CustomersId int64 `json:"customersId"`
 	SiteUsersId int64 `json:"siteUsersId"`
@@ -275,3 +270,30 @@ type DbResultFile struct {
 // 	FieldName   string `json:"fieldName"`
 // 	MessageCode string `json:"messageCode"`
 // }
+type DocumentRequest struct {
+	CustomersId int64  `json:"customersId"`
+	SiteUsersId int64  `json:"siteUsersId"`
+	DocumentId  int64  `json:"documentId"`
+	AddedBy     string `json:"addedBy"`
+}
+type RejectedDocuments struct {
+	BDocumentsUpload         bool    `json:"bDocumentsUpload"`
+	FinancialInstitutionForm *string `json:"financialInstitutionForm"` // null possible
+}
+
+// "details" object
+type BusinessVerificationDetails struct {
+	BusinessVerificationStatus   *string           `json:"businessVerificationStatus"` // null
+	BusinessVerificationStep     string            `json:"businessVerificationStep"`
+	BusinessVerificationNextStep string            `json:"businessVerificationNextStep"`
+	RawRejectedDocuments         string            `json:"rawRejectedDocuments"` // JSON string from DB
+	RejectedDocuments            RejectedDocuments `json:"rejectedDocuments"`
+}
+
+// Final RPC / API response
+type BusinessVerificationStatusResult struct {
+	ID      int64                       `json:"id"`
+	Details BusinessVerificationDetails `json:"details"`
+	Status  string                      `json:"status"`
+	Errors  []string                    `json:"errors"`
+}

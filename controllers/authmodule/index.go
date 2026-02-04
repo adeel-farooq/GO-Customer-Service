@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+// Token se data nikalne wala function
+
 func (s *AuthModuleService) RequestTotpQrCode(req *RequestTotpQrCodeRequest, res *RequestTotpQrCodeResponse) error {
 
 	if res == nil {

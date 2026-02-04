@@ -1093,3 +1093,25 @@ func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedPara
 	}
 	return int64(dbRes.ID), dbRes.Status, errorsStr, nil
 }
+func normalizeErrorsToSlice(errorsStr string) []string {
+	trimmed := strings.TrimSpace(errorsStr)
+	if trimmed == "" || trimmed == "[]" {
+		return []string{}
+	}
+
+	// JSON array string -> []string
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			if arr == nil {
+				return []string{}
+			}
+			return arr
+		}
+		// fallback
+		return []string{errorsStr}
+	}
+
+	// legacy plain text
+	return []string{errorsStr}
+}
