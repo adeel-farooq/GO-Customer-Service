@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -1151,4 +1152,196 @@ func normalizeErrorsToSlice(errorsStr string) []ErrorItem {
 	}
 
 	return result
+}
+
+func lowerFirst(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToLower(r[0])
+	return string(r)
+}
+
+func camelizeKeys(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[lowerFirst(k)] = camelizeKeys(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i := range x {
+			out[i] = camelizeKeys(x[i])
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// Builds formData from rawFormData exactly like .NET does (deserialize then serialize with camelCase)
+func buildFormDataFromRaw(raw string) (json.RawMessage, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return nil, false
+	}
+
+	var form BusinessFormData
+	if err := json.Unmarshal([]byte(raw), &form); err != nil {
+		return nil, false
+	}
+
+	// Map raw(PascalCase) -> output(camelCase with exact tags)
+	out := VerificationFormData{
+		Test:                         form.Test,
+		BusinessVerificationNextStep: form.BusinessVerificationNextStep,
+		BusinessVerificationStep:     form.BusinessVerificationStep,
+		RegistrationInformation: RegistrationInformation{
+			EntityName:                         form.RegistrationInformation.EntityName,
+			EntityTypesID:                      form.RegistrationInformation.EntityTypesID,
+			EntityTypesOther:                   form.RegistrationInformation.EntityTypesOther,
+			RegistrationDate:                   form.RegistrationInformation.RegistrationDate,
+			RegistrationNumber:                 form.RegistrationInformation.RegistrationNumber,
+			OfficialBusinessRegistrationNumber: form.RegistrationInformation.OfficialBusinessRegistrationNumber,
+			TaxNumber:                          form.RegistrationInformation.TaxNumber,
+			DoingBusinessAs:                    form.RegistrationInformation.DoingBusinessAs,
+			AddressStreet:                      form.RegistrationInformation.AddressStreet,
+			AddressNumber:                      form.RegistrationInformation.AddressNumber,
+			AddressPostCode:                    form.RegistrationInformation.AddressPostCode,
+			AddressCity:                        form.RegistrationInformation.AddressCity,
+			AddressState:                       form.RegistrationInformation.AddressState,
+			AddressCountry:                     form.RegistrationInformation.AddressCountry,
+			OperatingAddressStreet:             form.RegistrationInformation.OperatingAddressStreet,
+			OperatingAddressNumber:             form.RegistrationInformation.OperatingAddressNumber,
+			OperatingAddressPostCode:           form.RegistrationInformation.OperatingAddressPostCode,
+			OperatingAddressCity:               form.RegistrationInformation.OperatingAddressCity,
+			OperatingAddressState:              form.RegistrationInformation.OperatingAddressState,
+			OperatingAddressCountry:            form.RegistrationInformation.OperatingAddressCountry,
+		},
+		OperationsInformation: OperationsInformation{
+			WebAddress:                       form.OperationsInformation.WebAddress,
+			PhoneNumber:                      form.OperationsInformation.PhoneNumber,
+			SupportEmail:                     form.OperationsInformation.SupportEmail,
+			BPubliclyListed:                  form.OperationsInformation.BPubliclyListed,
+			Ticker:                           form.OperationsInformation.Ticker,
+			Exchanges:                        form.OperationsInformation.Exchanges,
+			OperationRegionIds:               form.OperationsInformation.OperationRegionIds,
+			BLicenseRequired:                 form.OperationsInformation.BLicenseRequired,
+			AdditionalLicensingInfo:          form.OperationsInformation.AdditionalLicensingInfo,
+			PrimaryRegulator:                 form.OperationsInformation.PrimaryRegulator,
+			LicenseNumber:                    form.OperationsInformation.LicenseNumber,
+			FinancialInstitutionFormFileName: form.OperationsInformation.FinancialInstitutionFormFileName,
+			FinancialInstitutionFormCustomersBusinessDocumentsId: form.OperationsInformation.FinancialInstitutionFormCustomersBusinessDocumentsId,
+			BusinessActivityIds:                    form.OperationsInformation.BusinessActivityIds,
+			Web3ChainsAndAddresses:                 form.OperationsInformation.Web3ChainsAndAddresses,
+			SourceOfFundsIds:                       form.OperationsInformation.SourceOfFundsIds,
+			SourceOfFundsOther:                     form.OperationsInformation.SourceOfFundsOther,
+			ActiveBanks:                            form.OperationsInformation.ActiveBanks,
+			YearlyTransactionsId:                   form.OperationsInformation.YearlyTransactionsId,
+			MonthlyUsdValueId:                      form.OperationsInformation.MonthlyUsdValueId,
+			BusinessAndIndustryType:                form.OperationsInformation.BusinessAndIndustryType,
+			CryptoCurrencyOffered:                  form.OperationsInformation.CryptoCurrencyOffered,
+			URLS:                                   form.OperationsInformation.URLs,
+			ProcessingTraffic:                      form.OperationsInformation.ProcessingTraffic,
+			WalletAddresses:                        form.OperationsInformation.WalletAddresses,
+			DirectorShareholderLocation:            form.OperationsInformation.Director_ShareholderLocation,
+			CompanyAuthorizedRepresentative:        form.OperationsInformation.CompanyAuthorizedRepresentative,
+			BCardPayment:                           form.OperationsInformation.BCardPayment,
+			ProviderName:                           form.OperationsInformation.ProviderName,
+			ProjectedAnnualTurnover:                form.OperationsInformation.ProjectedAnnualTurnover,
+			AverageTransactionValue:                form.OperationsInformation.AverageTransactionValue,
+			MinTransactionValues:                   form.OperationsInformation.MinTransactionValues,
+			MaxTransactionValues:                   form.OperationsInformation.MaxTransactionValues,
+			ChargeBack:                             form.OperationsInformation.ChargeBack,
+			RefundValues:                           form.OperationsInformation.RefundValues,
+			BOwnTokenSale:                          form.OperationsInformation.BOwnTokenSale,
+			CryptoTechnicalArchitecture:            form.OperationsInformation.CryptoTechnicalArchitecture,
+			FormalRegulatory:                       form.OperationsInformation.FormalRegulatory,
+			BusinessPlan:                           form.OperationsInformation.BusinessPlan,
+			BNFTSale:                               form.OperationsInformation.BNFTSale,
+			ExecutiveSummaryCrypto:                 form.OperationsInformation.ExecutiveSummaryCrypto,
+			ExecutiveSummaryNFT:                    form.OperationsInformation.ExecutiveSummaryNFT,
+			NFTDynamic:                             form.OperationsInformation.NFTDynamic,
+			NFTCustody:                             form.OperationsInformation.NFTCustody,
+			IsPortlProduct:                         form.OperationsInformation.IsPortlProduct,
+			BFundsReceivedUSA:                      form.OperationsInformation.BFundsReceivedUSA,
+			BFundsSentUSA:                          form.OperationsInformation.BFundsSentUSA,
+			PurposeOfAccountId:                     form.OperationsInformation.PurposeOfAccountId,
+			PurposeOfAccountOther:                  form.OperationsInformation.PurposeOfAccountOther,
+			AnticipatedMonthlyTransactionCountId:   form.OperationsInformation.AnticipatedMonthlyTransactionCountId,
+			AnticipatedMonthlyVolumeUsdId:          form.OperationsInformation.AnticipatedMonthlyVolumeUsdId,
+			CountriesSendingPaymentsTo:             form.OperationsInformation.CountriesSendingPaymentsTo,
+			CountriesReceivingPaymentsFrom:         form.OperationsInformation.CountriesReceivingPaymentsFrom,
+			AnticipatedMonthlyCryptoTransactionsId: form.OperationsInformation.AnticipatedMonthlyCryptoTransactionsId,
+			AnticipatedMonthlyCryptoVolumeUsdId:    form.OperationsInformation.AnticipatedMonthlyCryptoVolumeUsdId,
+			IntegrationMethodId:                    form.OperationsInformation.IntegrationMethodId,
+			ExpectedMonthlyPaymentVolumeUsdId:      form.OperationsInformation.ExpectedMonthlyPaymentVolumeUsdId,
+			SettlementPreferenceId:                 form.OperationsInformation.SettlementPreferenceId,
+			CustomerTrafficCountries:               form.OperationsInformation.CustomerTrafficCountries,
+			HistoricalChargebackRate:               form.OperationsInformation.HistoricalChargebackRate,
+			HistoricalRefundRate:                   form.OperationsInformation.HistoricalRefundRate,
+			ProductsServicesSold:                   form.OperationsInformation.ProductsServicesSold,
+		},
+		OwnerInformation: OwnerInformation{
+			ExemptionId:                form.OwnerInformation.ExemptionId,
+			BusinessBeneficialOwners:   form.OwnerInformation.BusinessBeneficialOwners,
+			IndividualBeneficialOwners: form.OwnerInformation.IndividualBeneficialOwners,
+			BeneficialOwnersStructure:  form.OwnerInformation.BeneficialOwnersStructure,
+			AuthorizedSigner:           form.OwnerInformation.AuthorizedSigner,
+			BConfirmAboveTen:           form.OwnerInformation.BConfirmAboveTen,
+		},
+		Terms: Terms{
+			BTaxAcknowledgement:      form.Terms.BTaxAcknowledgement,
+			BFatcaAcknowledgement:    form.Terms.BFatcaAcknowledgement,
+			BConfirmTrueAndCorrect:   form.Terms.BConfirmTrueAndCorrect,
+			BEConsentDisclosure:      form.Terms.BEConsentDisclosure,
+			BDepositAccountAgreement: form.Terms.BDepositAccountAgreement,
+			BUSAPatriotActNotice:     form.Terms.BUSAPatriotActNotice,
+			BAcceptTerms:             form.Terms.BAcceptTerms,
+		},
+		DocumentsUpload: make([]DocumentsUploadItem, 0),
+	}
+
+	// ensure slices are [] not null
+	if out.OperationsInformation.OperationRegionIds == nil {
+		out.OperationsInformation.OperationRegionIds = make([]int, 0)
+	}
+	if out.OperationsInformation.BusinessActivityIds == nil {
+		out.OperationsInformation.BusinessActivityIds = make([]int, 0)
+	}
+	if out.OperationsInformation.SourceOfFundsIds == nil {
+		out.OperationsInformation.SourceOfFundsIds = make([]int, 0)
+	}
+	if out.OwnerInformation.BusinessBeneficialOwners == nil {
+		out.OwnerInformation.BusinessBeneficialOwners = make([]any, 0)
+	}
+	if out.OwnerInformation.IndividualBeneficialOwners == nil {
+		out.OwnerInformation.IndividualBeneficialOwners = make([]any, 0)
+	}
+	if out.OwnerInformation.BeneficialOwnersStructure == nil {
+		out.OwnerInformation.BeneficialOwnersStructure = make([]any, 0)
+	}
+
+	for _, d := range form.DocumentsUpload {
+		out.DocumentsUpload = append(out.DocumentsUpload, DocumentsUploadItem{
+			DocumentTypesID: d.DocumentTypesID,
+			FileName:        d.FileName,
+		})
+	}
+
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, false
+	}
+
+	return json.RawMessage(b), true
+}
+
+// helper: raw json string -> gateway-shaped JSON (typed + correct keys)
+func ParseRawFormData(raw string) (json.RawMessage, bool) {
+	return buildFormDataFromRaw(raw)
 }

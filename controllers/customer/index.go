@@ -551,13 +551,26 @@ func (s *BusinessService) GetVerificationForm(req *GetVerificationFormRequest, r
 	}
 
 	// Enrich details like .NET: ListInnerErrors from InnerErrors
+	// Enrich details like .NET: ListInnerErrors from InnerErrors + build formData from rawFormData
 	if strings.TrimSpace(detailsStr) != "" {
 		var dto GetVerificationFormDto
 		if json.Unmarshal([]byte(detailsStr), &dto) == nil {
-			dto.ListInnerErrors = []ErrorResultDto{}
+
+			// 1) innerErrors -> listInnerErrors (always [] not null)
+			dto.ListInnerErrors = make([]ErrorResultDto, 0)
 			if strings.TrimSpace(dto.InnerErrors) != "" {
 				dto.ListInnerErrors = append(dto.ListInnerErrors, ParseInnerErrors(dto.InnerErrors)...)
 			}
+
+			// 2) rawFormData -> formData struct
+			// If DB didn't send formData or it's null, compute it
+			if dto.FormData == nil {
+				if fd, ok := ParseRawFormData(dto.RawFormData); ok {
+					dto.FormData = fd
+				}
+			}
+
+			// marshal back into detailsStr (still string for gob-safe DbResultRPC)
 			b, _ := json.Marshal(dto)
 			detailsStr = string(b)
 		}
