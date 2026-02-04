@@ -584,7 +584,7 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *DocumentRequest, re
 			Details: BusinessVerificationDetails{
 				RejectedDocuments: RejectedDocuments{},
 			},
-			Errors: []string{"Invalid_Json"},
+			Errors: []ErrorItem{{FieldName: "Json", MessageCode: "Invalid_Json"}},
 		}
 		return nil
 	}
@@ -605,7 +605,7 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *DocumentRequest, re
 			Details: BusinessVerificationDetails{
 				RejectedDocuments: RejectedDocuments{},
 			},
-			Errors: []string{err.Error()},
+			Errors: []ErrorItem{{FieldName: "Error", MessageCode: err.Error()}},
 		}
 		return nil
 	}
@@ -620,7 +620,7 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *DocumentRequest, re
 				Details: BusinessVerificationDetails{
 					RejectedDocuments: RejectedDocuments{},
 				},
-				Errors: []string{"Invalid_Details_JSON"},
+				Errors: []ErrorItem{{FieldName: "Details", MessageCode: "Invalid_Details_JSON"}},
 			}
 			return nil
 		}
@@ -629,7 +629,7 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *DocumentRequest, re
 		details.RejectedDocuments = RejectedDocuments{}
 	}
 
-	// ✅ Errors normalize to []string (handles "", "[]", JSON array, legacy text)
+	// ✅ Errors normalize to []ErrorItem (handles "", "[]", JSON array, legacy text)
 	errs := normalizeErrorsToSlice(errorsStr)
 
 	// ✅ Status rule
@@ -650,14 +650,14 @@ func (s *BusinessService) GetBusinessVerificationStatus(req *DocumentRequest, re
 }
 
 // RPC: "BusinessV3Service.GetDropdownData" (alias points to BusinessService)
-func (s *BusinessService) GetDropdownData(req *GetDropdownDataRequest, res *DbResultRPC) error {
+func (s *BusinessService) GetDropdownData(req *GetDropdownDataRequest, res *BusinessRegistrationMetadataResult) error {
 	if res == nil {
 		return fmt.Errorf("GetDropdownData: nil response pointer")
 	}
 	if req == nil {
-		bad := []ErrorResultDto{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
-		b, _ := json.Marshal(bad)
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: string(b)}
+		// bad := []ErrorResultDto{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
+		// b, _ := json.Marshal(bad)
+		*res = BusinessRegistrationMetadataResult{ID: 0, Details: BusinessRegistrationMetadataDetails{}, Status: "0", Errors: []ErrorItem{{FieldName: "Json", MessageCode: "Invalid_Json"}}}
 		return nil
 	}
 
@@ -674,25 +674,29 @@ func (s *BusinessService) GetDropdownData(req *GetDropdownDataRequest, res *DbRe
 		"SiteUsersId", req.SiteUsersId,
 	)
 	if err != nil {
-		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		*res = BusinessRegistrationMetadataResult{ID: 0, Status: "0", Details: BusinessRegistrationMetadataDetails{}, Errors: []ErrorItem{{FieldName: "Error", MessageCode: err.Error()}}}
 		return nil
 	}
 
-	finalErrors := errorsStr
-	statusOut := status
-	if strings.TrimSpace(errorsStr) == "" {
+	errs := normalizeErrorsToSlice(errorsStr)
+
+	// ✅ Status rule
+	statusOut := strings.TrimSpace(status)
+	if len(errs) == 0 {
 		statusOut = "1"
 	} else {
 		statusOut = "0"
-		trimmed := strings.TrimSpace(errorsStr)
-		if !strings.HasPrefix(trimmed, "[") {
-			parsed := parseLegacyDbErrorString(errorsStr)
-			b, _ := json.Marshal(parsed)
-			finalErrors = string(b)
-		}
 	}
-
-	*res = DbResultRPC{ID: id, Id: id, Status: statusOut, Details: detailsStr, Errors: finalErrors}
+	var details BusinessRegistrationMetadataDetails
+	if err := json.Unmarshal([]byte(detailsStr), &details); err != nil {
+		details = BusinessRegistrationMetadataDetails{}
+	}
+	*res = BusinessRegistrationMetadataResult{
+		ID:      id,
+		Status:  statusOut,
+		Details: details,
+		Errors:  errs,
+	}
 	return nil
 }
 

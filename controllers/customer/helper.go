@@ -1093,25 +1093,62 @@ func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedPara
 	}
 	return int64(dbRes.ID), dbRes.Status, errorsStr, nil
 }
-func normalizeErrorsToSlice(errorsStr string) []string {
-	trimmed := strings.TrimSpace(errorsStr)
-	if trimmed == "" || trimmed == "[]" {
-		return []string{}
+
+// func normalizeErrorsToSlice(errorsStr string) []string {
+// 	trimmed := strings.TrimSpace(errorsStr)
+// 	if trimmed == "" || trimmed == "[]" {
+// 		return make([]string, 0)
+// 	}
+
+// 	// JSON array string -> []string
+// 	if strings.HasPrefix(trimmed, "[") {
+// 		var arr []string
+// 		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+// 			if arr == nil {
+// 				return make([]string, 0)
+// 			}
+// 			return arr
+// 		}
+// 		// fallback
+// 		return []string{errorsStr}
+// 	}
+
+//		// legacy plain text
+//		return []string{errorsStr}
+//	}
+func normalizeErrorsToSlice(errorsStr string) []ErrorItem {
+	errorsStr = strings.TrimSpace(errorsStr)
+	if errorsStr == "" {
+		return []ErrorItem{}
 	}
 
-	// JSON array string -> []string
-	if strings.HasPrefix(trimmed, "[") {
-		var arr []string
-		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
-			if arr == nil {
-				return []string{}
-			}
-			return arr
+	parts := strings.Split(errorsStr, "|")
+	result := make([]ErrorItem, 0, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
-		// fallback
-		return []string{errorsStr}
+
+		// remove leading/trailing [ ]
+		part = strings.Trim(part, "[]")
+
+		segments := strings.Split(part, "]_[")
+		if len(segments) < 3 {
+			continue
+		}
+
+		field := strings.TrimSpace(segments[1])
+		code := strings.TrimSpace(segments[2])
+
+		if field != "" && code != "" {
+			result = append(result, ErrorItem{
+				FieldName:   field,
+				MessageCode: code,
+			})
+		}
 	}
 
-	// legacy plain text
-	return []string{errorsStr}
+	return result
 }

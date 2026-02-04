@@ -295,5 +295,55 @@ type BusinessVerificationStatusResult struct {
 	ID      int64                       `json:"id"`
 	Details BusinessVerificationDetails `json:"details"`
 	Status  string                      `json:"status"`
-	Errors  []string                    `json:"errors"`
+	Errors  []ErrorItem                 `json:"errors"`
+}
+
+// common "label/value" items (entityTypes, businessActivities, etc.)
+type LabelValue struct {
+	Label string `json:"label"`
+	Value string `json:"value"` // API me "1000" string hai
+}
+
+type StateProvince struct {
+	ID                int    `json:"id"`
+	StateProvinceName string `json:"stateProvinceName"`
+	AnsiCode          string `json:"ansiCode"`
+}
+
+type AvailableCountry struct {
+	ID          int             `json:"id"`
+	CountryName string          `json:"countryName"`
+	IsoCode     string          `json:"isoCode"`
+	States      []StateProvince `json:"states"`
+}
+
+type OpenedDocument struct {
+	ID                  int    `json:"id"`
+	Name                string `json:"name"`
+	InternalName        string `json:"internalName"`
+	OrderNumber         int    `json:"orderNumber"`
+	BAdditionalDocument bool   `json:"bAdditionalDocument"`
+}
+
+type BusinessRegistrationMetadataDetails struct {
+	EntityTypes            []LabelValue       `json:"entityTypes"`
+	AvailableCountries     []AvailableCountry `json:"availableCountries"`
+	BusinessActivities     []LabelValue       `json:"businessActivities"`
+	FundingSources         []LabelValue       `json:"fundingSources"`
+	TransactionVolumes     []LabelValue       `json:"transactionVolumes"`
+	MonthlyUsdEquivalents  []LabelValue       `json:"monthlyUsdEquivalents"`
+	UboReportingExemptions []LabelValue       `json:"uboReportingExemptions"`
+	RegionsOfOperation     []LabelValue       `json:"regionsOfOperation"`
+	OpenedDocumentsList    []OpenedDocument   `json:"openedDocumentsList"`
+}
+
+type BusinessRegistrationMetadataResult struct {
+	ID      int64                               `json:"id"`
+	Details BusinessRegistrationMetadataDetails `json:"details"`
+	Status  string                              `json:"status"`
+	Errors  []ErrorItem                         `json:"errors"`
+}
+type ErrorItem struct {
+	FieldName   string `json:"fieldName"`
+	MessageCode string `json:"messageCode"`
 }
