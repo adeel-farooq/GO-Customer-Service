@@ -25,6 +25,11 @@ func RegisterCustomerServices(rpcServer *rpc.Server) {
 	if err != nil {
 		log.Fatalf("Error registering business service: %v", err)
 	}
+	// Compatibility alias for gateway v3 business module RPC calls
+	err = rpcServer.RegisterName("BusinessV3Service", new(customer.BusinessService))
+	if err != nil {
+		log.Fatalf("Error registering BusinessV3Service alias: %v", err)
+	}
 
 	/* Register restricted services */
 	err = rpcServer.Register(new(restricted.RestrictedService))

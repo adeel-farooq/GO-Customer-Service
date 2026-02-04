@@ -521,6 +521,55 @@ func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest,
 	return nil
 }
 
+// RPC: "BusinessService.GetVerificationForm" (also exposed via alias "BusinessV3Service" if registered)
+func (s *BusinessService) GetVerificationForm(req *GetVerificationFormRequest, res *DbResultRPC) error {
+	if res == nil {
+		return fmt.Errorf("GetVerificationForm: nil response pointer")
+	}
+	if req == nil {
+		bad := []ErrorResultDto{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
+		b, _ := json.Marshal(bad)
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: string(b)}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sp := "V3_CustomerRole_BusinessModule_GetVerificationForm"
+	var detailsStr string
+	id, status, errorsStr, err := dbGetSPResult(
+		ctx,
+		sp,
+		&detailsStr,
+		"SiteUsersID", req.SiteUsersId,
+		"CustomersID", req.CustomersId,
+	)
+	if err != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		return nil
+	}
+
+	// Enrich details like .NET: ListInnerErrors from InnerErrors
+	if strings.TrimSpace(detailsStr) != "" {
+		var dto GetVerificationFormDto
+		if json.Unmarshal([]byte(detailsStr), &dto) == nil {
+			dto.ListInnerErrors = []ErrorResultDto{}
+			if strings.TrimSpace(dto.InnerErrors) != "" {
+				dto.ListInnerErrors = append(dto.ListInnerErrors, ParseInnerErrors(dto.InnerErrors)...)
+			}
+			b, _ := json.Marshal(dto)
+			detailsStr = string(b)
+		}
+	}
+
+	*res = DbResultRPC{ID: id, Id: id, Status: status, Details: detailsStr, Errors: errorsStr}
+	if strings.TrimSpace(res.Errors) == "" {
+		res.Status = "1"
+	}
+	return nil
+}
+
 // RPC method: "BusinessService.AddKYCDocumentV3"
 func (s *BusinessService) AddKYCDocumentV3(req *AddKYCDocumentRequest, res *DbResultRPC) error {
 	if res == nil {

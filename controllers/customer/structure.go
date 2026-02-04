@@ -18,6 +18,27 @@ type DbResultRPC struct {
 	Errors  string `json:"errors"`
 }
 
+// ---- Business Module V3 ----
+type GetVerificationFormRequest struct {
+	CustomersId int64 `json:"customersId"`
+	SiteUsersId int64 `json:"siteUsersId"`
+}
+
+// These match .NET GetVerificationFormDto JSON shape.
+// We keep fields flexible: FormData is raw JSON.
+type GetVerificationFormDto struct {
+	RawFormData     string           `json:"rawFormData"`
+	InnerErrors     string           `json:"innerErrors"`
+	ListInnerErrors []ErrorResultDto `json:"listInnerErrors"`
+	FormData        json.RawMessage  `json:"formData"`
+}
+
+type ErrorResultDto struct {
+	ErrorType   string `json:"errorType"`
+	FieldName   string `json:"fieldName"`
+	MessageCode string `json:"messageCode"`
+}
+
 // type DbResultRPC struct {
 // 	ID      int64  `json:"id"`
 // 	Id      int64  `json:"Id"`

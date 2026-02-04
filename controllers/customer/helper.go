@@ -965,6 +965,41 @@ func mergeEdges(base []OwnershipEdge, add []OwnershipEdge) []OwnershipEdge {
 
 func boolPtr(v bool) *bool { return &v }
 
+const (
+	innerErrorDelimiter = "]|[ "
+	innerFieldDelimiter = "]_["
+)
+
+func ParseInnerErrors(inner string) []ErrorResultDto {
+	inner = strings.TrimSpace(inner)
+	if inner == "" {
+		return []ErrorResultDto{}
+	}
+
+	tokens := strings.Split(inner, innerErrorDelimiter)
+	out := make([]ErrorResultDto, 0, len(tokens))
+	for _, t := range tokens {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		parts := strings.Split(t, innerFieldDelimiter)
+		out = append(out, ErrorResultDto{
+			ErrorType:   strings.TrimSpace(getStr(parts, 0)),
+			FieldName:   strings.TrimSpace(getStr(parts, 1)),
+			MessageCode: strings.TrimSpace(getStr(parts, 2)),
+		})
+	}
+	return out
+}
+
+func getStr(a []string, i int) string {
+	if i >= 0 && i < len(a) {
+		return a[i]
+	}
+	return ""
+}
+
 func DedupErrorsFile(in []ErrorResult) []ErrorResult {
 	seen := map[string]struct{}{}
 	out := make([]ErrorResult, 0, len(in))
@@ -1001,6 +1036,7 @@ func dbGetSPResult(ctx context.Context, sp string, detailsOut *string, namedPara
 		"v1_CustomerRole_BusinessModule_CompleteKYCDocumentUpload": true,
 		"v1_CustomerRole_BusinessModule_GetKYCDocumentDetails":     true,
 		"v1_CustomerRole_BusinessModule_DeleteKYCDocument":         true,
+		"V3_CustomerRole_BusinessModule_GetVerificationForm":       true,
 	}
 	if !allowedSPs[sp] {
 		return 0, "0", "SP not implemented or does not exist", fmt.Errorf("SP not implemented: %s", sp)
