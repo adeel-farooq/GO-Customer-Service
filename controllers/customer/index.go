@@ -365,33 +365,40 @@ func (s *BusinessService) UploadDocument(req *UploadDocumentRequest, res *DbResu
 	return nil
 }
 
-func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest, res *DbResultFile) error {
+func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest, res *SaveVerificationFormResult) error {
 	if res == nil {
 		return fmt.Errorf("SaveVerificationForm: nil response pointer")
 	}
 
-	// controller: if command == null => Invalid_Json
-	if req == nil || strings.TrimSpace(string(req.Command)) == "" || strings.TrimSpace(string(req.Command)) == "null" {
-		*res = DbResultFile{
-			ID: 0, Id: 0, Status: "0",
-			Details: "",
-			Errors:  marshalErrorResultFiles([]ErrorResultFile{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}),
+	// Validate request + command
+	if errs := ValidateSaveVerificationForm(req); len(errs) > 0 {
+		id := int64(0)
+		if req != nil {
+			id = req.CustomersId
+		}
+		*res = SaveVerificationFormResult{
+			ID:     id,
+			Status: "0",
+			Details: SaveVerificationFormResponse{
+				InnerErrors:     "",
+				ListInnerErrors: make([]ErrorItem, 0),
+			},
+			Errors: errs,
 		}
 		return nil
 	}
 
-	if errs := ValidateSaveVerificationForm(req); len(errs) > 0 {
-		*res = DbResultFile{ID: 0, Id: 0, Status: "0", Details: "", Errors: marshalErrorResultFiles(errs)}
-		return nil
-	}
-
-	// Parse minimal fields from command
-	var cmd VerificationForm
+	// Parse command payload (keep sub-parts as RawMessage so we don't coerce types)
+	var cmd SaveVerificationFormCommandPayload
 	if err := json.Unmarshal(req.Command, &cmd); err != nil {
-		*res = DbResultFile{
-			ID: 0, Id: 0, Status: "0",
-			Details: "",
-			Errors:  marshalErrorResultFiles([]ErrorResultFile{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}),
+		*res = SaveVerificationFormResult{
+			ID:     req.CustomersId,
+			Status: "0",
+			Details: SaveVerificationFormResponse{
+				InnerErrors:     "",
+				ListInnerErrors: make([]ErrorItem, 0),
+			},
+			Errors: []ErrorItem{{FieldName: "command", MessageCode: "Invalid_Json"}},
 		}
 		return nil
 	}
@@ -401,21 +408,33 @@ func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest,
 
 	sp := "v3_CustomerRole_BusinessModule_SaveVerificationForm"
 
+	rawOrNull := func(r json.RawMessage) string {
+		s := strings.TrimSpace(string(r))
+		if s == "" {
+			return "null"
+		}
+		return s
+	}
+
 	// ownerValidationResult / registrationValidationResult (placeholder until rules are ported)
 	ownerValidation := ResultDto{Id: 0, Errors: []ErrorResultFile{}}
 	regValidation := ResultDto{Id: 0, Errors: []ErrorResultFile{}}
 	jsonOwnerValidation, _ := json.Marshal(ownerValidation)
 	jsonRegValidation, _ := json.Marshal(regValidation)
 
-	// OwnershipGraph + OwnershipTree JSON
+	// OwnershipGraph + OwnershipTree JSON (best-effort)
 	jsonOwnershipGraph := "{}"
 	jsonOwnershipTree := "null"
-	if cmd.OwnerInformation != nil && len(cmd.OwnerInformation.BeneficialOwnersStructure) > 0 {
-		bos := strings.TrimSpace(string(cmd.OwnerInformation.BeneficialOwnersStructure))
+	var ownerInfo VerificationOwnerInformation
+	if strings.TrimSpace(string(cmd.OwnerInformation)) != "" && strings.TrimSpace(string(cmd.OwnerInformation)) != "null" {
+		_ = json.Unmarshal(cmd.OwnerInformation, &ownerInfo)
+	}
+	if len(ownerInfo.BeneficialOwnersStructure) > 0 {
+		bos := strings.TrimSpace(string(ownerInfo.BeneficialOwnersStructure))
 		if bos != "" && bos != "null" {
 			jsonOwnershipTree = bos
 			var children []OwnershipTreeNode
-			_ = json.Unmarshal(cmd.OwnerInformation.BeneficialOwnersStructure, &children)
+			_ = json.Unmarshal(ownerInfo.BeneficialOwnersStructure, &children)
 			root := OwnershipTreeNode{
 				BIsBusiness:       boolPtr(true),
 				OwnersGuid:        "",
@@ -432,26 +451,25 @@ func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest,
 
 	// Missing filenames check (best-effort; Storage can be nil)
 	missing := make([]string, 0, 16)
+	container := AzureBlobSecureRootContainerName()
+	basePath := businessFormDocumentPath(req.CustomersId)
 	if Storage != nil {
-		basePath := businessFormDocumentPath(req.CustomersId)
-		container := "" // TODO: read AzureBlobSecureRootContainerName from config
-
-		if cmd.OwnerInformation != nil {
-			for _, bo := range cmd.OwnerInformation.IndividualBeneficialOwners {
-				fn := strings.TrimSpace(bo.ProofOfAddressFilename)
-				if fn == "" {
-					continue
-				}
-				blobName := fmt.Sprintf("%d_%d_%s", req.CustomersId, req.SiteUsersId, fn)
-				exists, _ := Storage.CheckFileExists(basePath+blobName, container)
-				if !exists {
-					missing = append(missing, fn)
-				}
+		for _, bo := range ownerInfo.IndividualBeneficialOwners {
+			fn := strings.TrimSpace(bo.ProofOfAddressFilename)
+			if fn == "" {
+				continue
+			}
+			blobName := fmt.Sprintf("%d_%d_%s", req.CustomersId, req.SiteUsersId, fn)
+			exists, _ := Storage.CheckFileExists(basePath+blobName, container)
+			if !exists {
+				missing = append(missing, fn)
 			}
 		}
 
-		if cmd.OperationsInformation != nil {
-			fn := strings.TrimSpace(cmd.OperationsInformation.FinancialInstitutionFormFileName)
+		var opsInfo OperationsInfo
+		if strings.TrimSpace(string(cmd.OperationsInformation)) != "" && strings.TrimSpace(string(cmd.OperationsInformation)) != "null" {
+			_ = json.Unmarshal(cmd.OperationsInformation, &opsInfo)
+			fn := strings.TrimSpace(opsInfo.FinancialInstitutionFormFileName)
 			if fn != "" {
 				blobName := fmt.Sprintf("%d_%d_%s", req.CustomersId, req.SiteUsersId, fn)
 				exists, _ := Storage.CheckFileExists(basePath+blobName, container)
@@ -462,62 +480,94 @@ func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest,
 		}
 	}
 
-	jsonData := string(req.Command)
+	addedBy := strings.TrimSpace(req.AddedBy)
+	if addedBy == "" {
+		addedBy = strings.TrimSpace(cmd.AddedBy)
+	}
+	if addedBy == "" {
+		addedBy = "adeel"
+	}
 
+	// Build JsonData with PascalCase root keys (to match .NET SP payload expectation)
+	jsonDataObj := map[string]any{
+		"BusinessVerificationStep": cmd.BusinessVerificationStep,
+		"RegistrationInformation":  json.RawMessage(rawOrNull(cmd.RegistrationInformation)),
+		"OperationsInformation":    json.RawMessage(rawOrNull(cmd.OperationsInformation)),
+		"OwnerInformation":         json.RawMessage(rawOrNull(cmd.OwnerInformation)),
+		"Terms":                    json.RawMessage(rawOrNull(cmd.Terms)),
+		"AccountCurrencySelection": json.RawMessage(rawOrNull(cmd.AccountCurrencySelection)),
+		"DocumentsUpload":          json.RawMessage(rawOrNull(cmd.DocumentsUpload)),
+		"addedBy":                  addedBy,
+	}
+	jsonDataBytes, _ := json.MarshalIndent(jsonDataObj, "", "    ")
+	jsonData := string(jsonDataBytes)
+
+	// IMPORTANT: SP parameters are PascalCase (and include JsonData + validation/ownership payloads)
 	params := map[string]any{
 		"SiteUsersID":                      req.SiteUsersId,
 		"CustomersID":                      req.CustomersId,
 		"BusinessVerificationStep":         cmd.BusinessVerificationStep,
+		"AddedBy":                          addedBy,
 		"JsonData":                         jsonData,
 		"JsonOwnerValidationResult":        string(jsonOwnerValidation),
 		"JsonRegistrationValidationResult": string(jsonRegValidation),
 		"JsonOwnershipGraph":               jsonOwnershipGraph,
 		"JsonOwnershipTree":                jsonOwnershipTree,
 		"MissingFilenames":                 strings.Join(missing, ","),
-		"AddedBy":                          req.AddedBy,
 	}
 
 	dbRes, err := ExecSPDbResult(ctx, sp, params)
 	if err != nil {
-		*res = DbResultFile{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		*res = SaveVerificationFormResult{
+			ID:      req.CustomersId,
+			Status:  "0",
+			Details: SaveVerificationFormResponse{InnerErrors: "", ListInnerErrors: make([]ErrorItem, 0)},
+			Errors:  []ErrorItem{{FieldName: "Error", MessageCode: err.Error()}},
+		}
 		return nil
 	}
 
-	var detailsStr string
-	if s, ok := dbRes.Details.(string); ok {
-		detailsStr = s
-	}
-	var errorsStr string
-	if s, ok := dbRes.Errors.(string); ok {
-		errorsStr = s
-	}
-
-	id := int64(dbRes.ID)
-	status := dbRes.Status
-	if strings.TrimSpace(errorsStr) == "" {
-		status = "1"
-	} else {
-		status = "0"
-	}
-
-	// Always marshal errors as JSON array of objects (string), even if legacy string from DB
-	finalErrors := errorsStr
-	if strings.TrimSpace(errorsStr) != "" {
-		trimmed := strings.TrimSpace(errorsStr)
-		if !strings.HasPrefix(trimmed, "[") { // legacy string, not JSON array
-			parsed := parseLegacyDbErrorString(errorsStr)
-			b, _ := json.Marshal(parsed)
-			finalErrors = string(b)
+	// Build wrapper result
+	outRes := SaveVerificationFormResult{ID: req.CustomersId, Status: strings.TrimSpace(dbRes.Status), Errors: make([]ErrorItem, 0)}
+	// Details is returned as a JSON string from the SP
+	details := SaveVerificationFormResponse{ListInnerErrors: make([]ErrorItem, 0)}
+	if detailsStr, ok := dbRes.Details.(string); ok {
+		detailsStr = strings.TrimSpace(detailsStr)
+		if detailsStr != "" && detailsStr != "null" {
+			_ = json.Unmarshal([]byte(detailsStr), &details)
 		}
 	}
 
-	*res = DbResultFile{
-		ID:      id,
-		Id:      id,
-		Status:  status,
-		Details: detailsStr,
-		Errors:  finalErrors,
+	// Merge/normalize SP errors (so caller still receives problems even if details didn't include them)
+	if errStr, ok := dbRes.Errors.(string); ok {
+		errStr = strings.TrimSpace(errStr)
+		if errStr != "" && errStr != "[]" {
+			details.InnerErrors = errStr
+			norm := normalizeErrorsToSlice(errStr)
+			if len(norm) > 0 {
+				details.ListInnerErrors = append(details.ListInnerErrors, norm...)
+				details.ListInnerErrors = dedupErrorItems(details.ListInnerErrors)
+				outRes.Errors = append(outRes.Errors, norm...)
+				outRes.Errors = dedupErrorItems(outRes.Errors)
+			}
+		}
 	}
+
+	if details.ListInnerErrors == nil {
+		details.ListInnerErrors = make([]ErrorItem, 0)
+	}
+	if outRes.Errors == nil {
+		outRes.Errors = make([]ErrorItem, 0)
+	}
+	if outRes.Status == "" {
+		if len(outRes.Errors) == 0 {
+			outRes.Status = "1"
+		} else {
+			outRes.Status = "0"
+		}
+	}
+	outRes.Details = details
+	*res = outRes
 	return nil
 }
 

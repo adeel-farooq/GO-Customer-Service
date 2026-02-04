@@ -512,6 +512,20 @@ type SaveVerificationFormRequest struct {
 	Command json.RawMessage `json:"command"`
 }
 
+// Command payload shape coming from gateway for SaveVerificationForm.
+// We keep sub-objects as RawMessage so we can forward them to the SP without
+// type coercion (e.g. some IDs come as strings in the payload).
+type SaveVerificationFormCommandPayload struct {
+	BusinessVerificationStep string          `json:"businessVerificationStep"`
+	RegistrationInformation  json.RawMessage `json:"registrationInformation"`
+	OperationsInformation    json.RawMessage `json:"operationsInformation"`
+	OwnerInformation         json.RawMessage `json:"ownerInformation"`
+	Terms                    json.RawMessage `json:"terms"`
+	AccountCurrencySelection json.RawMessage `json:"accountCurrencySelection"`
+	DocumentsUpload          json.RawMessage `json:"documentsUpload"`
+	AddedBy                  string          `json:"addedBy,omitempty"`
+}
+
 // Minimal parts we need for missing files + ownership graph
 type VerificationForm struct {
 	BusinessVerificationStep string                        `json:"businessVerificationStep"`
@@ -665,4 +679,21 @@ type BusinessRegistrationMetadataResult struct {
 type ErrorItem struct {
 	FieldName   string `json:"fieldName"`
 	MessageCode string `json:"messageCode"`
+}
+type SaveVerificationFormResponse struct {
+	CustomerId                   int64              `json:"customerId"`
+	BusinessVerificationNextStep string             `json:"businessVerificationNextStep"`
+	BusinessVerificationStep     string             `json:"businessVerificationStep"`
+	SignificantParties           []SignificantParty `json:"significantParties"`
+	CompanyName                  *string            `json:"companyName"`
+	InnerErrors                  string             `json:"innerErrors"`
+	ListInnerErrors              []ErrorItem        `json:"listInnerErrors"`
+}
+
+// Gateway-facing wrapper for SaveVerificationForm (matches .NET DbResultDto style)
+type SaveVerificationFormResult struct {
+	ID      int64                        `json:"id"`
+	Details SaveVerificationFormResponse `json:"details"`
+	Status  string                       `json:"status"`
+	Errors  []ErrorItem                  `json:"errors"`
 }

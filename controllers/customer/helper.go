@@ -513,6 +513,13 @@ func ExecSPDbResult(ctx context.Context, spName string, params map[string]any) (
 		q += " " + strings.Join(assignments, ", ")
 	}
 
+	// Helpful debug output: exact query + args (sanitized unless SP_LOG_INCLUDE_SECRETS=1)
+	includeSecrets := envBool("SP_LOG_INCLUDE_SECRETS", false)
+	safe := sanitizeSPParams(params, includeSecrets)
+	fmt.Printf("SP exec (driver): %s\n", q)
+	fmt.Printf("SP exec (args): %s\n", formatSQLServerExecInlineArgs(safe))
+	fmt.Printf("SP exec (SSMS runnable):\n%s\n", formatSQLServerExecScript(spName, safe))
+
 	row := db.DB.QueryRowContext(ctx, q, args...)
 	var id sql.NullInt64
 	var status sql.NullString
@@ -538,6 +545,22 @@ func ExecSPDbResult(ctx context.Context, spName string, params map[string]any) (
 	}
 
 	return out, nil
+}
+
+func formatSQLServerExecInlineArgs(params map[string]any) string {
+	if params == nil || len(params) == 0 {
+		return "(no params)"
+	}
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, "@"+k+"="+sqlServerLiteral(params[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func logStoredProcedureCall(spName string, params map[string]any) {
@@ -602,7 +625,44 @@ func formatSQLServerExecScript(spName string, params map[string]any) string {
 	for k := range params {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+
+	// Prefer a stable, .NET-like order for the SaveVerificationForm SP.
+	if strings.EqualFold(spName, "v3_CustomerRole_BusinessModule_SaveVerificationForm") {
+		preferred := []string{
+			"AddedBy",
+			"BusinessVerificationStep",
+			"CustomersID",
+			"JsonData",
+			"JsonOwnerValidationResult",
+			"JsonOwnershipGraph",
+			"JsonOwnershipTree",
+			"JsonRegistrationValidationResult",
+			"MissingFilenames",
+			"SiteUsersID",
+		}
+		seen := make(map[string]struct{}, len(keys))
+		for _, k := range keys {
+			seen[strings.ToLower(k)] = struct{}{}
+		}
+		ordered := make([]string, 0, len(keys))
+		for _, p := range preferred {
+			if _, ok := seen[strings.ToLower(p)]; ok {
+				ordered = append(ordered, p)
+				delete(seen, strings.ToLower(p))
+			}
+		}
+		// Append any extra params not in preferred list (sorted for determinism)
+		extra := make([]string, 0, len(seen))
+		for _, k := range keys {
+			if _, ok := seen[strings.ToLower(k)]; ok {
+				extra = append(extra, k)
+			}
+		}
+		sort.Strings(extra)
+		keys = append(ordered, extra...)
+	} else {
+		sort.Strings(keys)
+	}
 
 	var b strings.Builder
 	b.WriteString("-- Copy/paste into SSMS\n")
@@ -849,18 +909,58 @@ func ValidateUploadDocument(req *UploadDocumentRequest) []ErrorResult {
 	return DedupErrorsFile(errs)
 }
 
-func ValidateSaveVerificationForm(req *SaveVerificationFormRequest) []ErrorResultFile {
-	var errs []ErrorResultFile
-
+func ValidateSaveVerificationForm(req *SaveVerificationFormRequest) []ErrorItem {
+	errItems := make([]ErrorItem, 0, 8)
 	if req == nil {
-		return []ErrorResultFile{{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"}}
+		return []ErrorItem{{FieldName: "command", MessageCode: "Invalid_Json"}}
 	}
-	cmd := strings.TrimSpace(string(req.Command))
-	if cmd == "" || cmd == "null" {
-		errs = append(errs, ErrorResultFile{ErrorType: "BadRequest", FieldName: "Json", MessageCode: "Invalid_Json"})
+	if req.CustomersId <= 0 {
+		errItems = append(errItems, ErrorItem{FieldName: "customersId", MessageCode: "Required"})
+	}
+	if req.SiteUsersId <= 0 {
+		errItems = append(errItems, ErrorItem{FieldName: "siteUsersId", MessageCode: "Required"})
+	}
+	// if strings.TrimSpace(req.AddedBy) == "" {
+	// 	errItems = append(errItems, ErrorItem{FieldName: "addedBy", MessageCode: "Required"})
+	// }
+
+	cmdStr := strings.TrimSpace(string(req.Command))
+	if cmdStr == "" || cmdStr == "null" {
+		errItems = append(errItems, ErrorItem{FieldName: "command", MessageCode: "Invalid_Json"})
+		return dedupErrorItems(errItems)
 	}
 
-	return DedupErrorsResultFile(errs)
+	// Validate minimal expected fields inside command
+	var cmd SaveVerificationFormCommandPayload
+	if err := json.Unmarshal(req.Command, &cmd); err != nil {
+		errItems = append(errItems, ErrorItem{FieldName: "command", MessageCode: "Invalid_Json"})
+		return dedupErrorItems(errItems)
+	}
+	if strings.TrimSpace(cmd.BusinessVerificationStep) == "" {
+		errItems = append(errItems, ErrorItem{FieldName: "businessVerificationStep", MessageCode: "Required"})
+	}
+	if strings.TrimSpace(req.AddedBy) == "" && strings.TrimSpace(cmd.AddedBy) == "" {
+		errItems = append(errItems, ErrorItem{FieldName: "addedBy", MessageCode: "Required"})
+	}
+
+	return dedupErrorItems(errItems)
+}
+
+func dedupErrorItems(in []ErrorItem) []ErrorItem {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]ErrorItem, 0, len(in))
+	for _, e := range in {
+		k := e.FieldName + "|" + e.MessageCode
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, e)
+	}
+	if out == nil {
+		return make([]ErrorItem, 0)
+	}
+	return out
 }
 
 func DedupErrorsResultFile(in []ErrorResultFile) []ErrorResultFile {
