@@ -31,6 +31,11 @@ func RegisterCustomerServices(rpcServer *rpc.Server) {
 	if err != nil {
 		log.Fatalf("Error registering restricted service: %v", err)
 	}
+	// Compatibility alias for gateway: Registration module v2 endpoints
+	err = rpcServer.RegisterName("RegistrationV2Service", new(restricted.RestrictedService))
+	if err != nil {
+		log.Fatalf("Error registering RegistrationV2Service alias: %v", err)
+	}
 
 	/* Register auth module services */
 	err = rpcServer.Register(new(authmodule.AuthModuleService))

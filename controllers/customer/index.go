@@ -9,6 +9,142 @@ import (
 	"time"
 )
 
+// SubmitVerificationForm RPC method for business verification
+func (s *BusinessService) SubmitVerificationForm(req *SubmitVerificationFormRequest, res *DbResultRPC) error {
+	if res == nil {
+		return fmt.Errorf("SubmitVerificationForm: nil response pointer")
+	}
+	if req == nil || len(req.Command) == 0 || string(req.Command) == "null" {
+		*res = DbResultRPC{
+			ID: 0, Id: 0, Status: "0",
+			Details: "",
+			Errors:  `[{"errorType":"BadRequest","fieldName":"Json","messageCode":"Invalid_Json"}]`,
+		}
+		return nil
+	}
+
+	// Parse minimal needed fields (reuse VerificationForm struct from saveverificationform)
+	var cmd VerificationForm
+	if err := json.Unmarshal(req.Command, &cmd); err != nil {
+		*res = DbResultRPC{
+			ID: 0, Id: 0, Status: "0",
+			Details: "",
+			Errors:  `[{"errorType":"BadRequest","fieldName":"Json","messageCode":"Invalid_Json"}]`,
+		}
+		return nil
+	}
+
+	// REUSE: owner/registration validation (if you already have, plug it)
+	ownerValidation := ResultDto{Id: 0, Errors: EmptyErrors()}
+	regValidation := ResultDto{Id: 0, Errors: EmptyErrors()}
+
+	// REUSE: ownership graph + tree (same as saveverificationform)
+	jsonOwnershipGraph := "{}"
+	jsonOwnershipTree := "null"
+	if cmd.OwnerInformation != nil && len(cmd.OwnerInformation.BeneficialOwnersStructure) > 0 && string(cmd.OwnerInformation.BeneficialOwnersStructure) != "null" {
+		jsonOwnershipTree = string(cmd.OwnerInformation.BeneficialOwnersStructure)
+		var children []OwnershipTreeNode
+		_ = json.Unmarshal(cmd.OwnerInformation.BeneficialOwnersStructure, &children)
+		root := OwnershipTreeNode{
+			BIsBusiness:       boolPtr(true),
+			OwnersGuid:        "",
+			PercentageOwned:   0,
+			BControllingParty: boolPtr(false),
+			PositionAtCompany: "",
+			Children:          children,
+		}
+		graph := buildOwnershipGraph(root)
+		b, _ := json.Marshal(graph)
+		jsonOwnershipGraph = string(b)
+	}
+
+	// REUSE: missing filenames check (same as saveverificationform)
+	missing := make([]string, 0, 16)
+	container := AzureBlobSecureRootContainerName()
+	basePath := businessFormDocumentPath(req.CustomersId)
+	if Storage != nil && cmd.OwnerInformation != nil {
+		for _, bo := range cmd.OwnerInformation.IndividualBeneficialOwners {
+			fn := strings.TrimSpace(bo.ProofOfAddressFilename)
+			if fn == "" {
+				continue
+			}
+			blobName := fmt.Sprintf("%d_%d_%s", req.CustomersId, req.SiteUsersId, fn)
+			exists, _ := Storage.CheckFileExists(basePath+blobName, container)
+			if !exists {
+				missing = append(missing, fn)
+			}
+		}
+	}
+	if Storage != nil && cmd.OperationsInformation != nil {
+		fn := strings.TrimSpace(cmd.OperationsInformation.FinancialInstitutionFormFileName)
+		if fn != "" {
+			blobName := fmt.Sprintf("%d_%d_%s", req.CustomersId, req.SiteUsersId, fn)
+			exists, _ := Storage.CheckFileExists(basePath+blobName, container)
+			if !exists {
+				missing = append(missing, fn)
+			}
+		}
+	}
+
+	// Prepare JSON strings like .NET DbClient
+	jsonData := string(req.Command)
+	jsonOwnerValidation, _ := json.Marshal(ownerValidation)
+	jsonRegValidation, _ := json.Marshal(regValidation)
+
+	ctx, cancel := withTimeout()
+	defer cancel()
+
+	sp := "v3_CustomerRole_BusinessModule_SubmitVerificationForm"
+	var detailsStr string
+	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr, map[string]interface{}{
+		"SiteUsersID":                      req.SiteUsersId,
+		"CustomersID":                      req.CustomersId,
+		"JsonData":                         jsonData,
+		"JsonOwnerValidationResult":        string(jsonOwnerValidation),
+		"JsonRegistrationValidationResult": string(jsonRegValidation),
+		"JsonOwnershipGraph":               jsonOwnershipGraph,
+		"JsonOwnershipTree":                jsonOwnershipTree,
+		"MissingFilenames":                 strings.Join(missing, ","),
+		"AddedBy":                          req.AddedBy,
+	})
+	if err != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		return nil
+	}
+
+	*res = DbResultRPC{ID: id, Id: id, Status: status, Details: detailsStr, Errors: errorsStr}
+	if strings.TrimSpace(res.Errors) == "" {
+		res.Status = "1"
+	}
+
+	// Success: send significant party emails (if needed)
+	if res.Status == "1" && strings.TrimSpace(res.Details) != "" {
+		var details SaveFormResponse
+		if json.Unmarshal([]byte(res.Details), &details) == nil {
+			if details.ListInnerErrors != nil && len(details.ListInnerErrors) == 0 {
+				for _, sparty := range details.SignificantParties {
+					if strings.TrimSpace(sparty.EmailAddress) == "" || TokenHelper == nil || NotificationsClient == nil {
+						continue
+					}
+					token, tokErr := TokenHelper.GenerateSignificantPartiesJumioToken(req.CustomersId, sparty.Id)
+					if tokErr != nil {
+						continue
+					}
+					portalURL := "" // TODO: call v1_CustomerRole_General_GetLicenseesBrandsForSiteUser if needed
+					base := portalURL
+					if strings.TrimSpace(base) == "" {
+						base = req.Domain
+					}
+					jumioLink := buildJumioLink(base, token)
+					_ = NotificationsClient.SendSignificantPartyJumioEmail(sparty.EmailAddress, details.CompanyName, jumioLink, req.Domain)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // DocumentGroupList RPC method
 func (s *BusinessService) DocumentGroupList(req *GetDocumentGroupListRequest, res *DbResultRPC) error {
 	if res == nil {
@@ -44,27 +180,28 @@ func (s *BusinessService) DocumentGroupList(req *GetDocumentGroupListRequest, re
 		}
 	}
 
-	       // Parse errors to array of objects if not empty
-	       var errorsArr []ErrorResultFile
-	       if strings.TrimSpace(errorsStr) != "" {
-		       errorsArr = parseLegacyDbErrorString(errorsStr)
-	       }
-	       finalErrors := errorsStr
-	       if len(errorsArr) > 0 {
-		       b, _ := json.Marshal(errorsArr)
-		       finalErrors = string(b)
-		       status = "0"
-	       } else {
-		       status = "1"
-	       }
-	       *res = DbResultRPC{
-		       ID:      id,
-		       Id:      id,
-		       Status:  status,
-		       Details: groupedJSON,
-		       Errors:  finalErrors,
-	       }
-	       return nil
+	// Parse errors to array of objects if not empty
+	var errorsArr []ErrorResultFile
+	if strings.TrimSpace(errorsStr) != "" {
+		errorsArr = parseLegacyDbErrorString(errorsStr)
+	}
+	finalErrors := errorsStr
+	if len(errorsArr) > 0 {
+		*res = DbResultRPC{
+			ID: 0, Id: 0, Status: "0",
+			Details: "",
+			Errors:  errorsJSON(OneError("BadRequest", "Json", "Invalid_Json")),
+		}
+		return nil
+	}
+	*res = DbResultRPC{
+		ID:      id,
+		Id:      id,
+		Status:  status,
+		Details: groupedJSON,
+		Errors:  finalErrors,
+	}
+	return nil
 }
 
 func (s *CustomerService) RegisterCustomerUser(req *CustomerUserRegistrationRequest, res *DbResult) error {
@@ -228,7 +365,6 @@ func (s *BusinessService) UploadDocument(req *UploadDocumentRequest, res *DbResu
 	return nil
 }
 
-// RPC method: "BusinessService.SaveVerificationForm"
 func (s *BusinessService) SaveVerificationForm(req *SaveVerificationFormRequest, res *DbResultFile) error {
 	if res == nil {
 		return fmt.Errorf("SaveVerificationForm: nil response pointer")

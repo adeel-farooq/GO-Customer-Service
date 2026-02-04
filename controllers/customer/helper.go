@@ -26,6 +26,43 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
+type ErrorResultFile struct {
+	ErrorType   string `json:"errorType"`
+	FieldName   string `json:"fieldName"`
+	MessageCode string `json:"messageCode"`
+}
+
+func EmptyErrors() []ErrorResultFile {
+	return []ErrorResultFile{}
+}
+
+func OneError(errorType, field, code string) []ErrorResultFile {
+	return []ErrorResultFile{{ErrorType: errorType, FieldName: field, MessageCode: code}}
+}
+func errorsJSON(errs any) string {
+	b, _ := json.Marshal(errs)
+	return string(b)
+}
+
+func ensureHTTP(u string) string {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return u
+	}
+	if strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://") {
+		return u
+	}
+	return "https://" + u
+}
+
+func buildJumioLink(baseURL string, token string) string {
+	baseURL = ensureHTTP(baseURL)
+	if strings.Contains(baseURL, "?") {
+		return baseURL + "&token=" + url.QueryEscape(token)
+	}
+	return strings.TrimRight(baseURL, "/") + "/idverification?token=" + url.QueryEscape(token)
+}
+
 // buildGroupsFromDocumentList: detailsStr me se listData nikalo, phir group banao
 func buildGroupsFromDocumentList(detailsStr string) (string, bool) {
 	var root any

@@ -7,6 +7,40 @@ import (
 	"time"
 )
 
+// RPC method: "RestrictedService.GetRegistrationDetails"
+// Returns raw JSON string in Details and raw error string in Errors.
+func (s *RestrictedService) GetRegistrationDetails(_ *struct{}, res *DbResultRPC) error {
+	if res == nil {
+		return fmt.Errorf("GetRegistrationDetails: nil response pointer")
+	}
+
+	ctx, cancel := withTimeout()
+	defer cancel()
+
+	sp := "v2_PublicRole_RegistrationModule_GetRegistrationDetails"
+
+	var detailsStr string
+	id, status, errorsStr, err := dbGetSPResult(ctx, sp, &detailsStr)
+	if err != nil {
+		*res = DbResultRPC{ID: 0, Id: 0, Status: "0", Details: "", Errors: err.Error()}
+		return nil
+	}
+
+	*res = DbResultRPC{
+		ID:      id,
+		Id:      id,
+		Status:  status,
+		Details: detailsStr,
+		Errors:  errorsStr,
+	}
+
+	if strings.TrimSpace(res.Errors) == "" {
+		res.Status = "1"
+	}
+
+	return nil
+}
+
 func (s *RestrictedService) GetErrorMessages(req *GetErrorMessagesRequest, res *DbResult) error {
 	// start := time.Now()
 	if res == nil {

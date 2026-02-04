@@ -2,6 +2,41 @@ package customer
 
 import "encoding/json"
 
+type SubmitVerificationFormRequest struct {
+	CustomersId int64           `json:"customersId"`
+	SiteUsersId int64           `json:"siteUsersId"`
+	AddedBy     string          `json:"addedBy"`
+	Domain      string          `json:"domain"`
+	Command     json.RawMessage `json:"command"`
+}
+
+type DbResultRPC struct {
+	ID      int64  `json:"id"`
+	Id      int64  `json:"Id"`
+	Status  string `json:"status"`
+	Details string `json:"details"`
+	Errors  string `json:"errors"`
+}
+
+// type DbResultRPC struct {
+// 	ID      int64  `json:"id"`
+// 	Id      int64  `json:"Id"`
+// 	Status  string `json:"status"`
+// 	Details string `json:"details"` // RAW JSON string
+// 	Errors  string `json:"errors"`  // RAW JSON string OR "" OR plain string
+// }
+
+type SaveFormResponse struct {
+	CompanyName        string             `json:"companyName"`
+	ListInnerErrors    []any              `json:"listInnerErrors"`
+	SignificantParties []SignificantParty `json:"significantParties"`
+}
+
+// type SignificantParty struct {
+// 	Id           int64  `json:"id"`
+// 	EmailAddress string `json:"emailAddress"`
+// }
+
 // DocumentGroupList request/response structs
 type GetDocumentGroupListRequest struct {
 	CustomersId int64 `json:"customersId"`
@@ -23,14 +58,6 @@ type AddKYCDocumentRequest struct {
 	FileName    string `json:"fileName,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
 	FileBytes   []byte `json:"fileBytes,omitempty"`
-}
-
-type DbResultRPC struct {
-	ID      int64  `json:"id"`
-	Id      int64  `json:"Id"`
-	Status  string `json:"status"`
-	Details string `json:"details"` // RAW JSON string
-	Errors  string `json:"errors"`  // RAW JSON string OR "" OR plain string
 }
 
 type UploadedDocumentDetails struct {
@@ -212,8 +239,8 @@ type DbResultFile struct {
 	Errors  string `json:"errors"`  // RAW JSON string (array) or empty
 }
 
-type ErrorResultFile struct {
-	ErrorType   string `json:"errorType"`
-	FieldName   string `json:"fieldName"`
-	MessageCode string `json:"messageCode"`
-}
+// type ErrorResultFile struct {
+// 	ErrorType   string `json:"errorType"`
+// 	FieldName   string `json:"fieldName"`
+// 	MessageCode string `json:"messageCode"`
+// }

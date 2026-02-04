@@ -1,5 +1,12 @@
 package restricted
 
+type DbResult1 struct {
+	Id      int    `json:"id"`
+	Status  string `json:"status"`
+	Details string `json:"details"`
+	Errors  string `json:"errors"`
+}
+
 // CountryRestrictedActionsService is the RPC service.
 // Example RPC method string: "CountryRestrictedActionsService.GetErrorMessages".
 type RestrictedService struct{}

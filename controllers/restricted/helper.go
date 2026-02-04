@@ -15,6 +15,45 @@ import (
 	"time"
 )
 
+func withTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+const (
+	errorDelimiter = "]|[ "
+	fieldDelimiter = "]_["
+)
+
+func ParseDbErrors(dbErrors string) []ErrorResult {
+	dbErrors = strings.TrimSpace(dbErrors)
+	if dbErrors == "" {
+		return []ErrorResult{{ErrorType: "InternalServerError", FieldName: "", MessageCode: "Unexpected_Error"}}
+	}
+	tokens := strings.Split(dbErrors, errorDelimiter)
+	out := make([]ErrorResult, 0, len(tokens))
+	for _, t := range tokens {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		parts := strings.Split(t, fieldDelimiter)
+		er := ErrorResult{
+			ErrorType:   strings.TrimSpace(get(parts, 0)),
+			FieldName:   strings.TrimSpace(get(parts, 1)),
+			MessageCode: strings.TrimSpace(get(parts, 2)),
+		}
+		out = append(out, er)
+	}
+	return out
+}
+
+func get(arr []string, i int) string {
+	if i >= 0 && i < len(arr) {
+		return arr[i]
+	}
+	return ""
+}
+
 const (
 	errorMessagesCacheKey = "Error_Messages"
 	errorMessagesCacheTTL = time.Hour
